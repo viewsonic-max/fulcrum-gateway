@@ -108,9 +108,13 @@ def parse_args():
             "leapfrog_sdk",
             "xai_sdk",
             "palantir_sdk",
+            "scale_sdk",
         ],
         default="hermes_sdk",
-        help="SDK runtime: openai_sdk, hermes_sdk, groq_sdk, mistral_sdk, gemini_sdk, leapfrog_sdk, xai_sdk, palantir_sdk",
+        help=(
+            "SDK runtime: openai_sdk, hermes_sdk, groq_sdk, mistral_sdk, gemini_sdk, leapfrog_sdk, "
+            "xai_sdk, palantir_sdk, scale_sdk"
+        ),
     )
     return parser.parse_args()
 

@@ -14,6 +14,7 @@ Start here and follow in order:
 | --- | --- | --- |
 | [Agent Authentication](agent-authentication.md) | Operators, contributors | Auth model, trust boundary, credential flows, proxy allowlist |
 | [Gateway Agent Runtimes](gateway-agent-runtimes.md) | Operators, contributors | Runtime patterns (Hermes, Claude Code, exec), space resolution, agent lifecycle, inbox semantics |
+| [Vendor Integrations](integrations/README.md) | Operators, contributors | Model runtimes vs. tool connectors; Palantir, Scale, Anduril Lattice, Starlink, Aalyria; SDK runtime selection + xai_sdk wiring note |
 | [Credential Security](credential-security.md) | Operators | Fingerprinting, honeypot keys, PAT rotation, detection signals |
 | [Module Guide: gateway.py](module-guide-gateway.md) | Contributors | Section-by-section code map with line ranges and key functions |
 | [Release Process](release-process.md) | Maintainers | Versioning, PyPI publishing, changelog generation |
