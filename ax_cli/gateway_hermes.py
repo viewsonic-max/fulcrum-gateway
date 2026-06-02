@@ -166,6 +166,7 @@ _INFERENCE_SDK_CLIENTS = {
     "leapfrog_sdk",
     "mistral_sdk",
     "xai_sdk",
+    "palantir_sdk",
 }
 
 # Valid MCP host clients for sentinel_cli. Maps client value → binary name.
