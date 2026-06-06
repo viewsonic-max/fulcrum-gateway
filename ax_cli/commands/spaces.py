@@ -7,7 +7,7 @@ import httpx
 import typer
 
 from ..config import get_client, resolve_gateway_config, resolve_space_id, save_space_id
-from ..output import JSON_OPTION, console, handle_error, print_json, print_kv, print_table
+from ..output import JSON_OPTION, console, handle_error, print_json, print_kv, print_table, unwrap_envelope
 
 log = logging.getLogger("ax.spaces")
 
@@ -183,10 +183,11 @@ def get_space(
         data = client.get_space(space_id)
     except httpx.HTTPStatusError as e:
         handle_error(e)
+    space = unwrap_envelope(data, "space")
     if as_json:
-        print_json(data)
+        print_json(space)
     else:
-        print_kv(data)
+        print_kv(space) if isinstance(space, dict) else print_kv(data)
 
 
 @app.command("members")

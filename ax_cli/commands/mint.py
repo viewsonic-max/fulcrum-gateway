@@ -16,7 +16,7 @@ import httpx
 import typer
 
 from ..config import get_user_client, resolve_user_token
-from ..output import JSON_OPTION, console, handle_error, print_json
+from ..output import JSON_OPTION, console, handle_error, print_json, unwrap_envelope
 
 app = typer.Typer(name="token", help="Token management", no_args_is_help=True)
 
@@ -35,7 +35,7 @@ def _resolve_agent_id(client, agent: str) -> tuple[str, str]:
         # Already a UUID — try to get the name
         try:
             data = client.get_agent(agent)
-            agent_data = data.get("agent", data) if isinstance(data, dict) else data
+            agent_data = unwrap_envelope(data, "agent")
             return agent, agent_data.get("name", agent)
         except Exception:
             return agent, agent
@@ -54,7 +54,7 @@ def _resolve_agent_id(client, agent: str) -> tuple[str, str]:
     # Fallback: direct agent lookup by name (handles agents hidden from list)
     try:
         data = client.get_agent(agent)
-        agent_data = data.get("agent", data) if isinstance(data, dict) else data
+        agent_data = unwrap_envelope(data, "agent")
         agent_id = agent_data.get("id")
         if agent_id:
             return agent_id, agent_data.get("name", agent)
@@ -81,7 +81,7 @@ def _create_agent_for_mint(client, agent: str) -> dict:
         if not _is_management_route_miss_error(exc):
             raise
         data = client.create_agent(agent, agent_type="direct")
-    return data.get("agent", data) if isinstance(data, dict) else data
+    return unwrap_envelope(data, "agent")
 
 
 @app.command()

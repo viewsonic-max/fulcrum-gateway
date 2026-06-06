@@ -18,7 +18,16 @@ from ..config import (
     resolve_gateway_config,
     resolve_space_id,
 )
-from ..output import JSON_OPTION, console, err_console, handle_error, print_json, print_kv, print_table
+from ..output import (
+    JSON_OPTION,
+    console,
+    err_console,
+    handle_error,
+    print_json,
+    print_kv,
+    print_table,
+    unwrap_envelope,
+)
 from .agent_profiles import profiles_app
 from .handoff import _wait_for_handoff_reply
 
@@ -762,15 +771,16 @@ def create_agent(
             )
     except httpx.HTTPStatusError as e:
         handle_error(e)
+    agent = unwrap_envelope(data, "agent")
     if as_json:
-        print_json(data)
+        print_json(agent)
     else:
-        console.print(f"[green]Created agent:[/green] {data['name']} ({data['id']})")
+        console.print(f"[green]Created agent:[/green] {agent['name']} ({agent['id']})")
         print_kv(
             {
-                "origin": data.get("origin"),
-                "status": data.get("status"),
-                "space_id": data.get("space_id"),
+                "origin": agent.get("origin"),
+                "status": agent.get("status"),
+                "space_id": agent.get("space_id"),
             }
         )
 
@@ -786,10 +796,11 @@ def get_agent(
         data = client.get_agent(identifier)
     except httpx.HTTPStatusError as e:
         handle_error(e)
+    agent = unwrap_envelope(data, "agent")
     if as_json:
-        print_json(data)
+        print_json(agent)
     else:
-        print_kv(data)
+        print_kv(agent)
 
 
 @app.command("update")
@@ -864,11 +875,15 @@ def update_agent(
         data = client.update_agent(identifier, **fields)
     except httpx.HTTPStatusError as e:
         handle_error(e)
-    _warn_if_fields_dropped(fields, data)
+    agent = unwrap_envelope(data, "agent")
+    # Use unwrapped shape for the warning check — if the server wrapped the
+    # response, the wrapped layer wouldn't carry the agent fields we compare
+    # against, and every update would warn-on-drop spuriously.
+    _warn_if_fields_dropped(fields, agent)
     if as_json:
-        print_json(data)
+        print_json(agent)
     else:
-        console.print(f"[green]Updated agent:[/green] {data['name']}")
+        console.print(f"[green]Updated agent:[/green] {agent['name']}")
 
 
 @app.command("delete")

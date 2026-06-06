@@ -2,6 +2,7 @@
 
 import json
 import re
+from typing import Any
 
 import httpx
 import typer
@@ -38,6 +39,36 @@ def apply_envelope(
     data["skipped"] = skipped
     data["summary"] = summary or {}
     data["details"] = details or []
+    return data
+
+
+def unwrap_envelope(data: Any, key: str) -> Any:
+    """Unwrap a single-resource API envelope like ``{<key>: {...}}``.
+
+    Returns ``data[key]`` if ``data`` is a dict whose ``key`` maps to another
+    dict; otherwise returns ``data`` unchanged.
+
+    Backend convention: single-resource GET / CREATE / UPDATE responses wrap
+    the payload in ``{<resource>: {...}}`` while list responses come flat.
+    Each call site used to open-code ``data.get(key, data) if isinstance(...) ...``
+    and we kept missing it — tasks alone leaked it three times before we added
+    this helper. See GH #167.
+
+    Safe to call on:
+      - flat dicts (no ``key``): returned unchanged
+      - lists: returned unchanged
+      - ``None`` / scalars: returned unchanged
+      - dicts where ``data[key]`` is non-dict (e.g. a scalar or list): returned
+        unchanged so we don't accidentally narrow a richer response shape
+
+    Always pass the explicit ``key`` (``"task"``, ``"agent"``, ``"message"``,
+    ...). The contract is "I expect a ``{<key>: ...}`` envelope; if it's
+    already flat, hand it back."
+    """
+    if isinstance(data, dict):
+        inner = data.get(key)
+        if isinstance(inner, dict):
+            return inner
     return data
 
 

@@ -24,7 +24,7 @@ import typer
 from .. import gateway as gateway_core
 from ..config import get_client, resolve_agent_name, resolve_space_id
 from ..mentions import merge_explicit_mentions_metadata
-from ..output import JSON_OPTION, console, print_json
+from ..output import JSON_OPTION, console, print_json, unwrap_envelope
 from .listen import _is_self_authored, _iter_sse, _remember_reply_anchor, _should_respond, _strip_mention
 
 app = typer.Typer(name="channel", help="Run an aX Claude Code channel over MCP stdio", no_args_is_help=False)
@@ -983,8 +983,8 @@ class ChannelBridge:
                 return self.client.send_message(self.space_id, text, parent_id=reply_to, metadata=metadata)
 
             data = await asyncio.to_thread(_send_as_agent)
-            message = data.get("message", data)
-            sent_id = message.get("id") or data.get("id")
+            message = unwrap_envelope(data, "message")
+            sent_id = message.get("id") or (data.get("id") if isinstance(data, dict) else None)
             _remember_reply_anchor(self._reply_anchor_ids, sent_id)
             await self.publish_processing_status(reply_to, "completed")
             await self.touch_gateway(

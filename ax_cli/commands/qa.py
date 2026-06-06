@@ -24,7 +24,16 @@ from ..config import (
     resolve_space_id,
 )
 from ..context_keys import build_upload_context_key
-from ..output import EXIT_NOT_OK, EXIT_SKIPPED, JSON_OPTION, apply_envelope, console, mention_prefix, print_json
+from ..output import (
+    EXIT_NOT_OK,
+    EXIT_SKIPPED,
+    JSON_OPTION,
+    apply_envelope,
+    console,
+    mention_prefix,
+    print_json,
+    unwrap_envelope,
+)
 from .apps import (
     APP_SPECS,
     _build_signal_metadata,
@@ -162,12 +171,10 @@ def _attachment_ref(info: dict[str, Any], *, context_key: str) -> dict[str, Any]
 
 
 def _message_from_response(data: Any) -> dict[str, Any]:
-    if isinstance(data, dict):
-        message = data.get("message")
-        if isinstance(message, dict):
-            return message
-        return data
-    return {}
+    # Unwrap the {message: ...} envelope (or return data flat); if data isn't
+    # a dict at all the caller expects {} so we map None / scalars to that.
+    unwrapped = unwrap_envelope(data, "message")
+    return unwrapped if isinstance(unwrapped, dict) else {}
 
 
 def _message_id(data: Any) -> str | None:
