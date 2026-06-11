@@ -123,3 +123,24 @@ def test_client_omits_sandbox_header_when_absent():
 def test_module_exposes_missing_credentials_guard():
     # _build_client is the single fail-closed gate both handlers route through.
     assert hasattr(lattice_tools, "_build_client")
+
+
+def test_entity_id_is_quoted_into_path(monkeypatch):
+    """Model-supplied entity ids must not escape the /api/v1/entities/<id>
+    path segment (#187 review: path injection)."""
+    captured = {}
+
+    def fake_request(self, method, path, body=None, **kwargs):
+        captured["method"] = method
+        captured["path"] = path
+        return {}
+
+    monkeypatch.setattr(LatticeClient, "_request", fake_request)
+    client = LatticeClient("https://env.lattice.test", "tok")
+
+    client.get_entity("../../admin?x=1")
+    assert captured["path"] == "/api/v1/entities/..%2F..%2Fadmin%3Fx%3D1"
+
+    client.publish_entity("a/b", {"kind": "track"})
+    assert captured["method"] == "PUT"
+    assert captured["path"] == "/api/v1/entities/a%2Fb"

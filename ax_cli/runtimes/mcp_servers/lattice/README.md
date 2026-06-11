@@ -59,7 +59,7 @@ Run standalone for a smoke test:
 python -m ax_cli.runtimes.mcp_servers.lattice
 ```
 
-## Status: scaffold — confirm before production use
+## Status: functional — confirm before production use
 
 This connector wraps the two documented Entity-Manager REST operations
 (`GET` / `PUT /api/v1/entities/{id}`) from Anduril's public developer docs.

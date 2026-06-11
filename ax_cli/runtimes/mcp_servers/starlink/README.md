@@ -40,7 +40,7 @@ Run standalone for a smoke test:
 python -m ax_cli.runtimes.mcp_servers.starlink
 ```
 
-## Status: scaffold — confirm before production use
+## Status: functional — confirm before production use
 
 The OAuth2 client-credentials flow is the established Starlink Enterprise
 auth model, but Starlink versions its resource paths and the telemetry

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -116,7 +117,9 @@ class LatticeClient:
 
     def get_entity(self, entity_id: str) -> Any:
         """GET a single entity by id."""
-        return self._request("GET", f"/api/v1/entities/{entity_id}")
+        # entity_id can be model-supplied; quote it (safe="") so a value with
+        # '/' or '..' cannot escape the /api/v1/entities/<id> path segment.
+        return self._request("GET", f"/api/v1/entities/{urllib.parse.quote(entity_id, safe='')}")
 
     def publish_entity(self, entity_id: str, entity: dict[str, Any]) -> Any:
         """PUT (create-or-update) a single entity by id.
@@ -125,4 +128,4 @@ class LatticeClient:
         validates at call time and returns an error for an invalid entity,
         which `_request` surfaces as a LatticeError carrying the status code.
         """
-        return self._request("PUT", f"/api/v1/entities/{entity_id}", body=entity)
+        return self._request("PUT", f"/api/v1/entities/{urllib.parse.quote(entity_id, safe='')}", body=entity)

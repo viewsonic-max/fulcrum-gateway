@@ -26,6 +26,7 @@ token URL and resource paths against the operator's Enterprise API Swagger
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -71,6 +72,7 @@ class StarlinkClient:
         self._token_url = token_url
         self._timeout = timeout
         self._token: str | None = None
+        self._token_expires_at: float = 0.0
 
     # ── auth ────────────────────────────────────────────────────────────────
 
@@ -105,14 +107,25 @@ class StarlinkClient:
         if not token:
             raise StarlinkError("Starlink token response did not contain an access_token")
         self._token = token
+        # Client-credentials tokens are short-lived; refresh 60s before the
+        # advertised expiry so a long-running MCP server doesn't start failing
+        # with 401s. A response without expires_in gets a conservative 5-minute
+        # cache rather than living forever.
+        try:
+            ttl = float(payload.get("expires_in") or 300.0)
+        except (TypeError, ValueError):
+            ttl = 300.0
+        self._token_expires_at = time.monotonic() + max(ttl - 60.0, 30.0)
         return token
 
     def _auth_header(self) -> str:
-        return f"Bearer {self._token or self._fetch_token()}"
+        if not self._token or time.monotonic() >= self._token_expires_at:
+            self._fetch_token()
+        return f"Bearer {self._token}"
 
     # ── requests ────────────────────────────────────────────────────────────
 
-    def _request(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+    def _request(self, method: str, path: str, body: dict[str, Any] | None = None, *, _retry_auth: bool = True) -> Any:
         url = f"{self._base_url}{path}"
         data = json.dumps(body).encode("utf-8") if body is not None else None
         headers = {
@@ -125,6 +138,11 @@ class StarlinkClient:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
                 raw = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
+            if exc.code == 401 and _retry_auth:
+                # Token revoked before its advertised expiry — mint a fresh
+                # one and retry the request once.
+                self._token = None
+                return self._request(method, path, body, _retry_auth=False)
             detail = ""
             try:
                 detail = exc.read().decode("utf-8")[:500]
@@ -148,11 +166,13 @@ class StarlinkClient:
 
     def get_service_lines(self, account_number: str) -> Any:
         """List the service lines on an enterprise account."""
-        return self._request("GET", f"/v1/account/{account_number}/service-lines")
+        # account_number can be model-supplied; quote it (safe="") so a value
+        # with '/' or '..' cannot escape the /v1/account/<n> path segment.
+        return self._request("GET", f"/v1/account/{urllib.parse.quote(account_number, safe='')}/service-lines")
 
     def get_account(self, account_number: str) -> Any:
         """Fetch one enterprise account summary."""
-        return self._request("GET", f"/v1/account/{account_number}")
+        return self._request("GET", f"/v1/account/{urllib.parse.quote(account_number, safe='')}")
 
     def query_telemetry(self, body: dict[str, Any]) -> Any:
         """Query device telemetry. `body` is passed through to the telemetry
