@@ -52,7 +52,7 @@ QUERY_TELEMETRY_SCHEMA: dict[str, Any] = {
             "type": "object",
             "description": (
                 "Telemetry query body passed through to the Enterprise telemetry "
-                "endpoint, e.g. {\"accountNumber\": \"ACC-123\", \"batchSize\": 100}. "
+                'endpoint, e.g. {"accountNumber": "ACC-123", "batchSize": 100}. '
                 "The exact schema is version/deployment specific — see the README."
             ),
         },
