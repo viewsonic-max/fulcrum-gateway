@@ -1113,7 +1113,7 @@ def placement_set(
         print_json(result)
         return
 
-    record = result.get("agent", result) if isinstance(result, dict) else {}
+    record = unwrap_envelope(result, "agent") if isinstance(result, dict) else {}
     name = record.get("name") or name_or_id
     new_space = record.get("space_id") or space_id
     pinned_str = "pinned" if record.get("pinned") else "unpinned"

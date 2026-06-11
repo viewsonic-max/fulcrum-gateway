@@ -107,7 +107,7 @@ def create(
         result = client.create_space(name, description=description, visibility=visibility)
     except httpx.HTTPStatusError as e:
         handle_error(e)
-    space = result.get("space", result) if isinstance(result, dict) else result
+    space = unwrap_envelope(result, "space")
     if as_json:
         print_json(space)
     else:
