@@ -448,16 +448,24 @@ def test_diff_ignores_ax_profiles_bookkeeping_key(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_agent_info_from_registry_derives_client_from_runtime_type(monkeypatch):
-    from ax_cli import agent_settings_profiles as mod
-    from ax_cli import gateway as gateway_core
+def _gateway_registry(tmp_path: Path, monkeypatch, payload: dict | None = None) -> Path:
+    """Point AX_GATEWAY_DIR at a tmp gateway dir; write registry.json if *payload* given."""
+    gw_dir = tmp_path / "gateway"
+    gw_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("AX_GATEWAY_DIR", str(gw_dir))
+    registry_file = gw_dir / "registry.json"
+    if payload is not None:
+        registry_file.write_text(json.dumps(payload))
+    return registry_file
 
-    monkeypatch.setattr(
-        gateway_core,
-        "load_gateway_registry",
-        lambda: {
-            "agents": [{"name": "agent-maker", "workdir": "/tmp/agent-maker", "runtime_type": "claude_code_channel"}]
-        },
+
+def test_agent_info_from_registry_derives_client_from_runtime_type(tmp_path, monkeypatch):
+    from ax_cli import agent_settings_profiles as mod
+
+    _gateway_registry(
+        tmp_path,
+        monkeypatch,
+        {"agents": [{"name": "agent-maker", "workdir": "/tmp/agent-maker", "runtime_type": "claude_code_channel"}]},
     )
 
     info = mod.agent_info_from_registry("agent-maker")
@@ -465,16 +473,43 @@ def test_agent_info_from_registry_derives_client_from_runtime_type(monkeypatch):
     assert info == {"workdir": "/tmp/agent-maker", "runtime_type": "claude_code_channel", "client": "claude_cli"}
 
 
-def test_agent_info_from_registry_client_none_for_unsupported_runtime(monkeypatch):
+def test_agent_info_from_registry_client_none_for_unsupported_runtime(tmp_path, monkeypatch):
     from ax_cli import agent_settings_profiles as mod
-    from ax_cli import gateway as gateway_core
 
-    monkeypatch.setattr(
-        gateway_core,
-        "load_gateway_registry",
-        lambda: {"agents": [{"name": "wiki", "workdir": "/tmp/wiki", "runtime_type": "hermes_plugin"}]},
+    _gateway_registry(
+        tmp_path,
+        monkeypatch,
+        {"agents": [{"name": "wiki", "workdir": "/tmp/wiki", "runtime_type": "hermes_plugin"}]},
     )
 
     info = mod.agent_info_from_registry("wiki")
 
     assert info == {"workdir": "/tmp/wiki", "runtime_type": "hermes_plugin", "client": None}
+
+
+def test_agent_info_from_registry_returns_none_for_unknown_agent(tmp_path, monkeypatch):
+    from ax_cli import agent_settings_profiles as mod
+
+    _gateway_registry(tmp_path, monkeypatch, {"agents": [{"name": "other", "runtime_type": "claude_code_channel"}]})
+
+    assert mod.agent_info_from_registry("ghost") is None
+
+
+def test_agent_info_from_registry_raises_when_registry_missing(tmp_path, monkeypatch):
+    from ax_cli import agent_settings_profiles as mod
+
+    _gateway_registry(tmp_path, monkeypatch, payload=None)
+
+    with pytest.raises(mod.RegistryLookupError, match="Is the Gateway running"):
+        mod.agent_info_from_registry("agent-maker")
+
+
+def test_agent_info_from_registry_raises_on_malformed_registry(tmp_path, monkeypatch):
+    from ax_cli import agent_settings_profiles as mod
+
+    registry_file = _gateway_registry(tmp_path, monkeypatch)
+    registry_file.write_text("{not valid json")
+
+    with pytest.raises(mod.RegistryLookupError, match="Could not read the Gateway registry") as excinfo:
+        mod.agent_info_from_registry("agent-maker")
+    assert "registry.json" in str(excinfo.value)

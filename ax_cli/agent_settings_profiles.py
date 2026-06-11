@@ -290,14 +290,18 @@ def apply(
     return path
 
 
-def workdir_for_agent(agent_name: str) -> str | None:
-    """Look up an agent's workdir from the local Gateway registry."""
-    info = agent_info_from_registry(agent_name)
-    return info["workdir"] if info else None
+class RegistryLookupError(Exception):
+    """The local Gateway registry could not be consulted for agent info.
+
+    Distinct from "agent not found" (a healthy registry with no entry for the
+    agent, which `agent_info_from_registry` reports as None): this means the
+    registry itself is missing or unreadable, and the message says which.
+    """
 
 
 def agent_info_from_registry(agent_name: str) -> dict[str, str | None] | None:
-    """Return registry-derived info for *agent_name*, or None if not found.
+    """Return registry-derived info for *agent_name*, or None if the agent
+    has no entry in the registry.
 
     Keys:
       ``workdir``     — the agent's workdir, or None if unset.
@@ -306,20 +310,30 @@ def agent_info_from_registry(agent_name: str) -> dict[str, str | None] | None:
       ``client``      — the profile client derived from ``runtime_type`` via
                         `_gateway_runtime_to_client` (e.g. ``claude_cli``), or None
                         when that gateway runtime has no profile support yet.
-    """
-    try:
-        from . import gateway as gateway_core
 
+    Raises RegistryLookupError when the registry file is missing (the Gateway
+    has likely never run on this machine) or exists but can't be read or
+    parsed — collapsing those into "not found" sends the operator to check
+    the daemon when the real problem is a broken registry file (#298).
+    """
+    from . import gateway as gateway_core
+
+    registry_file = gateway_core.registry_path()
+    if not registry_file.exists():
+        raise RegistryLookupError(f"No local Gateway registry found at {registry_file}. Is the Gateway running?")
+    try:
         registry = gateway_core.load_gateway_registry()
-        entry = gateway_core.find_agent_entry(registry, agent_name)
-        if not entry:
-            return None
-        workdir = str(entry.get("workdir") or "").strip() or None
-        runtime_type = str(entry.get("runtime_type") or "").strip() or None
-        return {
-            "workdir": workdir,
-            "runtime_type": runtime_type,
-            "client": _gateway_runtime_to_client(runtime_type),
-        }
-    except Exception:
+    # json.JSONDecodeError and UnicodeDecodeError are ValueErrors; OSError
+    # covers permission/IO failures. Anything else is a bug and should crash.
+    except (OSError, ValueError) as exc:
+        raise RegistryLookupError(f"Could not read the Gateway registry at {registry_file}: {exc}") from exc
+    entry = gateway_core.find_agent_entry(registry, agent_name)
+    if not entry:
         return None
+    workdir = str(entry.get("workdir") or "").strip() or None
+    runtime_type = str(entry.get("runtime_type") or "").strip() or None
+    return {
+        "workdir": workdir,
+        "runtime_type": runtime_type,
+        "client": _gateway_runtime_to_client(runtime_type),
+    }
