@@ -731,16 +731,21 @@ def runtime_auth_write(
         raise typer.Exit(1)
     path = spec["path"]
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(value + "\n", encoding="utf-8")
-    # NTFS uses ACLs, not POSIX mode bits — chmod is meaningful only off-Windows.
+    # Lock the file to owner-only BEFORE writing the secret, so the credential
+    # never exists world-readable, even briefly. touch(mode) only applies to a
+    # newly created file, so chmod tightens a pre-existing (possibly looser)
+    # file too. NTFS uses ACLs, not POSIX mode bits, so this is off-Windows only.
     if sys.platform != "win32":
+        path.touch(mode=0o600)
         path.chmod(0o600)
+    path.write_text(value + "\n", encoding="utf-8")
     payload = _runtime_auth_status_payload(provider, spec)
     if as_json:
         print_json(payload)
         return
     err_console.print(f"[green]Stored {expected_key} for {provider}[/green]")
     err_console.print(f"  path = {path}")
+    err_console.print("  [dim]note: static token with no auto-refresh — re-run this command when it expires.[/dim]")
 
 
 @runtime_auth_app.command("status")

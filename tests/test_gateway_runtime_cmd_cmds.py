@@ -5,6 +5,7 @@ Ported from skipped test_gateway_commands*.py; monkeypatches target ax_cli.comma
 from __future__ import annotations
 
 import json
+import sys
 
 from typer.testing import CliRunner
 
@@ -271,6 +272,9 @@ class TestRuntimeAuth:
         # bare-token file, trailing newline, never echoes the value in output
         assert path.read_text(encoding="utf-8") == "sk-codex-123\n"
         assert "sk-codex-123" not in result.stdout
+        # credential file is owner-only on POSIX (never world/group-readable)
+        if sys.platform != "win32":
+            assert (path.stat().st_mode & 0o077) == 0
 
         # status reports presence, not the value (assert via JSON — the human
         # output soft-wraps long paths across lines under Rich's 80-col default)
