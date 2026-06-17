@@ -2018,6 +2018,65 @@ def test_write_channel_setup_requires_token_file(monkeypatch):
         )
 
 
+# ---- write_channel_setup model propagation ----
+
+
+def test_write_channel_setup_writes_model_to_settings(tmp_path, monkeypatch):
+    """Registered model is written to .claude/settings.local.json during channel setup."""
+    import json
+
+    monkeypatch.setattr(
+        channel_mod,
+        "_gateway_agent_channel_defaults",
+        lambda n: {
+            "AX_TOKEN_FILE": str(tmp_path / "token"),
+            "AX_BASE_URL": "https://paxai.app",
+            "AX_AGENT_NAME": "orion",
+            "AX_AGENT_ID": "aid-1",
+            "AX_SPACE_ID": "sp-1",
+            "AX_GATEWAY_WORKDIR": "",
+            "model": "claude-haiku-4-5",
+        },
+    )
+    (tmp_path / "token").write_text("tok")
+
+    result = channel_mod.write_channel_setup(agent_name="orion", workdir=tmp_path)
+
+    settings_path = tmp_path / ".claude" / "settings.local.json"
+    assert settings_path.exists()
+    settings = json.loads(settings_path.read_text())
+    assert settings["model"] == "claude-haiku-4-5"
+    assert result["model"] == "claude-haiku-4-5"
+
+
+def test_write_channel_setup_no_model_leaves_settings_without_model_key(tmp_path, monkeypatch):
+    """When registry has no model, settings.local.json is written without a model key."""
+    import json
+
+    monkeypatch.setattr(
+        channel_mod,
+        "_gateway_agent_channel_defaults",
+        lambda n: {
+            "AX_TOKEN_FILE": str(tmp_path / "token"),
+            "AX_BASE_URL": "https://paxai.app",
+            "AX_AGENT_NAME": "orion",
+            "AX_AGENT_ID": "aid-1",
+            "AX_SPACE_ID": "sp-1",
+            "AX_GATEWAY_WORKDIR": "",
+            "model": "",
+        },
+    )
+    (tmp_path / "token").write_text("tok")
+
+    result = channel_mod.write_channel_setup(agent_name="orion", workdir=tmp_path)
+
+    settings_path = tmp_path / ".claude" / "settings.local.json"
+    assert settings_path.exists()
+    settings = json.loads(settings_path.read_text())
+    assert "model" not in settings
+    assert result["model"] is None
+
+
 # ---- Docker mode MCP config ----
 
 

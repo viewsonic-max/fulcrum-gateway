@@ -22,6 +22,7 @@ import httpx
 import typer
 
 from .. import gateway as gateway_core
+from ..agent_settings_profiles import write_model as write_model_to_settings
 from ..config import get_client, resolve_agent_name, resolve_space_id
 from ..mentions import merge_explicit_mentions_metadata
 from ..output import JSON_OPTION, console, print_json, unwrap_envelope
@@ -141,6 +142,7 @@ def _gateway_agent_channel_defaults(agent_name: str) -> dict[str, str]:
         "AX_AGENT_ID": str(entry.get("agent_id") or ""),
         "AX_SPACE_ID": str(entry.get("space_id") or ""),
         "AX_GATEWAY_WORKDIR": str(entry.get("workdir") or ""),
+        "model": str(entry.get("model") or ""),
     }
 
 
@@ -472,6 +474,9 @@ def write_channel_setup(
     _write_channel_workspace_readme(cli_readme_path, agent_name=agent_name, workdir=target_workdir)
     context_path = _write_channel_workspace_context(target_workdir, agent_name=agent_name)
 
+    registered_model = str(defaults.get("model") or "").strip() or None
+    write_model_to_settings(target_workdir, "claude_cli", registered_model)
+
     launch_command = client_profile.launch_template.format(
         mcp_path=mcp_path,
         server_name=server_name,
@@ -482,6 +487,7 @@ def write_channel_setup(
         "space_id": resolved_space_id,
         "base_url": resolved_base_url,
         "mode": normalized_mode,
+        "model": registered_model,
         "mcp_path": str(mcp_path),
         "env_path": str(resolved_env_path),
         "cli_config_path": str(cli_config_path),
