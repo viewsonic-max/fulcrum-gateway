@@ -36,7 +36,7 @@ Register agents the same way as normal, prefixed with `AX_OFFLINE=1`:
 AX_OFFLINE=1 ax gateway agents add my-echo --template echo_test
 
 # Claude Code channel agent
-AX_OFFLINE=1 ax gateway agents add my-agent --template claude_code_channel
+AX_OFFLINE=1 ax gateway agents add my-agent --template claude_code_channel --workdir /path/to/workspace
 
 # Exec agent
 AX_OFFLINE=1 ax gateway agents add my-exec --template exec
@@ -157,7 +157,7 @@ AX_OFFLINE=1 ax gateway agents smoke my-hermes-agent --message "ping"
 AX_OFFLINE=1 ax gateway start
 
 # 2. Register your agent
-AX_OFFLINE=1 ax gateway agents add my-agent --template claude_code_channel
+AX_OFFLINE=1 ax gateway agents add my-agent --template claude_code_channel --workdir /path/to/workspace
 
 # 3. Set up the channel (first time, or after changing workspace)
 AX_OFFLINE=1 ax channel setup my-agent --workdir /path/to/workspace
