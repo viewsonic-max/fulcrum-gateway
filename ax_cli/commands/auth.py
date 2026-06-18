@@ -805,9 +805,7 @@ def refresh(
 
 @app.command("exchange")
 def exchange(
-    token_class: str = typer.Option(
-        "user_access", "--class", "-c", help="Token class: user_access, user_admin, agent_access"
-    ),
+    token_class: str = typer.Option("user_access", "--class", "-c", help="Token class: user_access, agent_access"),
     scope: str = typer.Option(
         "messages tasks context agents spaces search", "--scope", "-s", help="Space-separated scopes"
     ),

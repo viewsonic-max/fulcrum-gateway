@@ -730,7 +730,7 @@ def create_agent(
 ):
     """Create a new agent.
 
-    Uses the management API (user_admin JWT) when available,
+    Uses the management API (user JWT) when available,
     falls back to legacy /api/v1/agents for Cognito auth.
     """
     client = get_client()

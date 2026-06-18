@@ -1,6 +1,6 @@
 """ax credentials — programmatic credential management (AUTH-SPEC-001 §8).
 
-Requires a user PAT (axp_u_) which exchanges for user_admin JWT.
+Requires a user PAT (axp_u_) which exchanges for a user JWT.
 All operations are API-first — same as what the UI does.
 """
 
