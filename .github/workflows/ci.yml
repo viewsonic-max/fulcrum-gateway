@@ -67,13 +67,33 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          fetch-depth: 0   # PR range scan needs the base commit present locally
 
-      - name: Check for exposed secrets
-        uses: gitleaks/gitleaks-action@v2
+      # Run the pinned TruffleHog image directly (no GitHub API call -> avoids the
+      # gitleaks-action@v2 403 on GET /pulls/{n}/commits). Pinned by image DIGEST
+      # (immutable; == ghcr.io/...:3.95.6).
+      #   PRs:  scan this PR's commit range (base..HEAD) so a secret added then
+      #         deleted within the branch is still caught. The base==head case
+      #         (which would silently scan nothing) is guarded to a hard failure.
+      #   push: scan the merged working tree (filesystem mode).
+      # --results=verified,unknown fails on confirmed-live AND format-matched-
+      # but-unverifiable secrets (private keys, custom tokens), not verified-only.
+      - name: Scan for exposed secrets
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          TH_IMAGE: ghcr.io/trufflesecurity/trufflehog@sha256:96f8429082cb2d4ae73b1096dcdb2f5aa139881d97042b0c5e5fa226a392e056
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            BASE='${{ github.event.pull_request.base.sha }}'
+            HEAD='${{ github.event.pull_request.head.sha }}'
+            test "$BASE" != "$HEAD" || { echo "empty commit range; refusing to scan nothing"; exit 1; }
+            docker run --rm -v "${{ github.workspace }}:/repo:ro" "$TH_IMAGE" \
+              git file:///repo --since-commit "$BASE" \
+              --results=verified,unknown --fail --no-update
+          else
+            docker run --rm -v "${{ github.workspace }}:/repo:ro" "$TH_IMAGE" \
+              filesystem /repo --results=verified,unknown --fail --no-update
+          fi
 
   audit:
     runs-on: ubuntu-latest
