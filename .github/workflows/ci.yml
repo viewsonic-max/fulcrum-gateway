@@ -66,23 +66,34 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # PR range scan needs the base commit present locally
 
-      # Scan the checked-out tree with TruffleHog's filesystem mode.
-      # Why not gitleaks-action@v2: its PR-scan path calls GET /pulls/{n}/commits
-      # and 403s ("Resource not accessible by integration").
-      # Why not trufflesecurity/trufflehog (the action): it only runs
-      # `trufflehog git --since-commit BASE --branch HEAD` and silently scans
-      # nothing (exit 0, green) when base==head — a false-pass security check.
-      # So run the pinned TruffleHog image directly with the `filesystem`
-      # subcommand: no GitHub API call, no git base/head footgun, always scans.
-      # Pinned by image digest (immutable; == ghcr.io/...:3.95.6). --fail exits
-      # non-zero on results; --results=verified fails only on credentials
-      # confirmed live, keeping the gate deterministic and false-positive-free.
+      # Run the pinned TruffleHog image directly (no GitHub API call -> avoids the
+      # gitleaks-action@v2 403 on GET /pulls/{n}/commits). Pinned by image DIGEST
+      # (immutable; == ghcr.io/...:3.95.6).
+      #   PRs:  scan this PR's commit range (base..HEAD) so a secret added then
+      #         deleted within the branch is still caught. The base==head case
+      #         (which would silently scan nothing) is guarded to a hard failure.
+      #   push: scan the merged working tree (filesystem mode).
+      # --results=verified,unknown fails on confirmed-live AND format-matched-
+      # but-unverifiable secrets (private keys, custom tokens), not verified-only.
       - name: Scan for exposed secrets
+        env:
+          TH_IMAGE: ghcr.io/trufflesecurity/trufflehog@sha256:96f8429082cb2d4ae73b1096dcdb2f5aa139881d97042b0c5e5fa226a392e056
         run: |
-          docker run --rm -v "${{ github.workspace }}:/repo:ro" \
-            ghcr.io/trufflesecurity/trufflehog@sha256:96f8429082cb2d4ae73b1096dcdb2f5aa139881d97042b0c5e5fa226a392e056 \
-            filesystem /repo --results=verified --fail --no-update
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            BASE='${{ github.event.pull_request.base.sha }}'
+            HEAD='${{ github.event.pull_request.head.sha }}'
+            test "$BASE" != "$HEAD" || { echo "empty commit range; refusing to scan nothing"; exit 1; }
+            docker run --rm -v "${{ github.workspace }}:/repo:ro" "$TH_IMAGE" \
+              git file:///repo --since-commit "$BASE" \
+              --results=verified,unknown --fail --no-update
+          else
+            docker run --rm -v "${{ github.workspace }}:/repo:ro" "$TH_IMAGE" \
+              filesystem /repo --results=verified,unknown --fail --no-update
+          fi
 
   audit:
     runs-on: ubuntu-latest
