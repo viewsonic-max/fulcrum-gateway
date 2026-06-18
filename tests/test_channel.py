@@ -2049,10 +2049,8 @@ def test_write_channel_setup_writes_model_to_settings(tmp_path, monkeypatch):
     assert result["model"] == "claude-haiku-4-5"
 
 
-def test_write_channel_setup_no_model_leaves_settings_without_model_key(tmp_path, monkeypatch):
-    """When registry has no model, settings.local.json is written without a model key."""
-    import json
-
+def test_write_channel_setup_no_model_does_not_write_settings(tmp_path, monkeypatch):
+    """When registry has no model, write_channel_setup does not touch settings.local.json."""
     monkeypatch.setattr(
         channel_mod,
         "_gateway_agent_channel_defaults",
@@ -2071,9 +2069,7 @@ def test_write_channel_setup_no_model_leaves_settings_without_model_key(tmp_path
     result = channel_mod.write_channel_setup(agent_name="orion", workdir=tmp_path)
 
     settings_path = tmp_path / ".claude" / "settings.local.json"
-    assert settings_path.exists()
-    settings = json.loads(settings_path.read_text())
-    assert "model" not in settings
+    assert not settings_path.exists()
     assert result["model"] is None
 
 

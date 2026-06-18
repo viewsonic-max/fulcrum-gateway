@@ -475,7 +475,8 @@ def write_channel_setup(
     context_path = _write_channel_workspace_context(target_workdir, agent_name=agent_name)
 
     registered_model = str(defaults.get("model") or "").strip() or None
-    write_model_to_settings(target_workdir, "claude_cli", registered_model)
+    if registered_model:
+        write_model_to_settings(target_workdir, "claude_cli", registered_model)
 
     launch_command = client_profile.launch_template.format(
         mcp_path=mcp_path,

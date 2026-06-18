@@ -3972,7 +3972,7 @@ def test_apply_claude_code_channel_model_writes_model(tmp_path):
 
     workdir = tmp_path / "workspace"
     workdir.mkdir()
-    entry = {"workdir": str(workdir), "model": "claude-sonnet-4-6"}
+    entry = {"workdir": str(workdir), "model": "claude-sonnet-4-6", "runtime_type": "claude_code_channel"}
 
     _apply_claude_code_channel_model(entry)
 
@@ -3986,34 +3986,42 @@ def test_apply_claude_code_channel_model_no_op_without_workdir():
     """No error and no write when workdir is absent from entry."""
     from ax_cli.gateway_runtime import _apply_claude_code_channel_model
 
-    _apply_claude_code_channel_model({"model": "claude-sonnet-4-6"})
+    _apply_claude_code_channel_model({"model": "claude-sonnet-4-6", "runtime_type": "claude_code_channel"})
 
 
-def test_apply_claude_code_channel_model_clears_model_when_none(tmp_path):
-    """Removes the model key when entry has no model (agent was updated to remove it)."""
+def test_apply_claude_code_channel_model_preserves_profile_model_when_registry_has_none(tmp_path):
+    """When registry has no model, a profile-set model in settings.local.json is not clobbered."""
     from ax_cli.gateway_runtime import _apply_claude_code_channel_model
 
     workdir = tmp_path / "workspace"
     workdir.mkdir()
     settings_dir = workdir / ".claude"
     settings_dir.mkdir()
-    (settings_dir / "settings.local.json").write_text(json.dumps({"model": "old-model", "_axProfiles": ["base"]}))
+    (settings_dir / "settings.local.json").write_text(json.dumps({"model": "profile-model", "_axProfiles": ["cheap"]}))
 
-    _apply_claude_code_channel_model({"workdir": str(workdir), "model": None})
+    _apply_claude_code_channel_model(
+        {"workdir": str(workdir), "model": None, "runtime_type": "claude_code_channel"}
+    )
 
     result = json.loads((settings_dir / "settings.local.json").read_text())
-    assert "model" not in result
-    assert result["_axProfiles"] == ["base"]
+    assert result["model"] == "profile-model"
+    assert result["_axProfiles"] == ["cheap"]
 
 
-def test_apply_claude_code_channel_model_swallows_write_error(tmp_path):
-    """A bad workdir path is logged but never raises — runtime must still start."""
+def test_apply_claude_code_channel_model_swallows_write_error(tmp_path, monkeypatch):
+    """A write failure is logged but never raises — runtime must still start."""
+    from ax_cli import agent_settings_profiles
     from ax_cli.gateway_runtime import _apply_claude_code_channel_model
+
+    def _raise(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(agent_settings_profiles, "write_model", _raise)
 
     errors = []
     _apply_claude_code_channel_model(
-        {"workdir": str(tmp_path / "nonexistent" / "deep"), "model": "claude-sonnet-4-6"},
+        {"workdir": str(tmp_path), "model": "claude-sonnet-4-6", "runtime_type": "claude_code_channel"},
         log=errors.append,
     )
-    # Should not raise; log should capture the warning
-    assert any("warning" in e for e in errors) or len(errors) == 0  # created dirs, so no error
+    assert len(errors) == 1
+    assert "warning" in errors[0]
