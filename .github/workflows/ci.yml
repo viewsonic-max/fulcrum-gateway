@@ -67,20 +67,22 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # Scan the checked-out working tree with TruffleHog in filesystem mode.
-      # Replaces gitleaks-action@v2, whose PR-scan path called
-      # GET /pulls/{n}/commits and failed with 403 "Resource not accessible by
-      # integration". Filesystem mode makes no GitHub API call, so it cannot
-      # hit that failure class. Pinned by commit SHA (not a mutable tag).
-      # The action injects --fail itself (non-zero exit 183 when results are
-      # found), so it must NOT be repeated in extra_args. --results=verified
-      # fails only on credentials TruffleHog actively confirmed are live, which
-      # keeps the gate deterministic and free of pattern-match false positives.
+      # Scan the checked-out tree with TruffleHog's filesystem mode.
+      # Why not gitleaks-action@v2: its PR-scan path calls GET /pulls/{n}/commits
+      # and 403s ("Resource not accessible by integration").
+      # Why not trufflesecurity/trufflehog (the action): it only runs
+      # `trufflehog git --since-commit BASE --branch HEAD` and silently scans
+      # nothing (exit 0, green) when base==head — a false-pass security check.
+      # So run the pinned TruffleHog image directly with the `filesystem`
+      # subcommand: no GitHub API call, no git base/head footgun, always scans.
+      # Pinned by image digest (immutable; == ghcr.io/...:3.95.6). --fail exits
+      # non-zero on results; --results=verified fails only on credentials
+      # confirmed live, keeping the gate deterministic and false-positive-free.
       - name: Scan for exposed secrets
-        uses: trufflesecurity/trufflehog@30d5bb91af1a771378349dbbb0c82129392acf70 # v3.95.6
-        with:
-          path: .
-          extra_args: --results=verified
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/repo:ro" \
+            ghcr.io/trufflesecurity/trufflehog@sha256:96f8429082cb2d4ae73b1096dcdb2f5aa139881d97042b0c5e5fa226a392e056 \
+            filesystem /repo --results=verified --fail --no-update
 
   audit:
     runs-on: ubuntu-latest
