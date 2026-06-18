@@ -28,7 +28,10 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
 
+      # 3.12 runs only the coverage pass below (it exercises the full suite too),
+      # so we don't run pytest twice on the floor version and make it the straggler.
       - name: Run tests
+        if: matrix.python-version != '3.12'
         run: pytest tests/ -v --tb=short
 
       - name: Run tests with coverage
