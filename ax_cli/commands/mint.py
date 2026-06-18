@@ -1,7 +1,7 @@
 """ax token mint — single command to create an agent PAT.
 
 Handles the full bootstrap flow: detect user PAT → resolve agent →
-exchange for user_admin JWT → issue agent PAT → optionally save + profile.
+exchange for a user JWT → issue agent PAT → optionally save + profile.
 
 Requires a user PAT (axp_u_). Fails clearly if run with an agent PAT.
 """
@@ -26,10 +26,8 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 def _resolve_agent_id(client, agent: str) -> tuple[str, str]:
     """Resolve agent name or UUID to (agent_id, agent_name).
 
-    Uses user_access JWT (which has 'agents' scope) instead of user_admin
-    (which lacks 'agents.list'). This is a known scope gap — user_admin
-    only has agents.create, not agents.list. Workaround: resolve via the
-    regular agents list endpoint, which works with user_access.
+    Resolves via the regular agents list endpoint using a user_access JWT
+    (which carries the 'agents' scope).
     """
     if _UUID_RE.match(agent):
         # Already a UUID — try to get the name
@@ -113,7 +111,7 @@ def mint(
     Requires a user PAT (axp_u_). The full flow:
       1. Verify you have a user PAT
       2. Resolve agent name to UUID
-      3. Exchange for user_admin JWT
+      3. Exchange for a user JWT
       4. Issue agent-bound PAT
       5. Optionally save token + create profile
 
@@ -185,7 +183,7 @@ def mint(
     else:
         status(f"[green]Found:[/green] {agent_name} ({agent_id[:12]}...)")
 
-    # Step 3+4: Issue agent PAT (uses user_admin JWT via mgmt endpoint)
+    # Step 3+4: Issue agent PAT (uses a user JWT via mgmt endpoint)
     pat_name = name or f"{agent_name}-cli"
     status(f"[cyan]Minting PAT '{pat_name}' (audience={audience}, expires={expires_days}d)...[/cyan]")
     try:
