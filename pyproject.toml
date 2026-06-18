@@ -28,7 +28,7 @@ dependencies = [
     "httpx>=0.25",
     "rich>=13.0",
     "pyyaml>=6.0.3",
-    "tomli-w>=1.0",
+    "tomli-w>=1.2.0",
 ]
 
 [project.urls]
