@@ -4138,3 +4138,23 @@ def test_hermes_monitor_presence_check_fires_once_per_interval():
     assert len(client.calls) == 1, (
         f"expected 1 presence check, got {len(client.calls)}"
     )
+
+
+def test_hermes_monitor_second_pid_tick_does_not_stamp_local_clock():
+    """#327: between presence checks, a PID-alive tick must never write a local timestamp."""
+    # First tick fires the presence check (relays backend ts "2025-06-01T10:00:00+00:00").
+    # Second tick is within the 30s window — last_seen_at must stay at the backend value,
+    # not be overwritten with a fresh local _now_iso() call.
+    client = _FakePresenceClient(presence={"last_seen_at": "2025-06-01T10:00:00+00:00"})
+    runtime = _make_hermes_runtime()
+    runtime._supervised_process = _FakeAliveProcess()
+    runtime._new_client = lambda: client
+
+    wait_iter = iter([False, False, True])
+    runtime.stop_event.wait = lambda timeout=None: next(wait_iter)
+
+    runtime._monitor_hermes_plugin_process()
+
+    assert runtime._state["last_seen_at"] == "2025-06-01T10:00:00+00:00", (
+        "last_seen_at must not be overwritten with a local timestamp between presence checks"
+    )
