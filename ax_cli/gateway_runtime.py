@@ -749,6 +749,15 @@ class ManagedAgentRuntime:
                 if event is None:
                     continue
                 kind = str(event.get("kind") or "").strip().lower()
+                if kind == "heartbeat":
+                    # Relayed platform-liveness beat from the sentinel's embedded
+                    # SSE adapter. Refresh freshness only — this is the activity
+                    # signal the staleness ladder reads (ADR-008). It replaces the
+                    # monitor thread's PID-existence stamping (#295) so a
+                    # wedged-but-alive sentinel ages into stale/offline instead of
+                    # rendering green forever.
+                    self._update_state(last_seen_at=_now_iso())
+                    continue
                 if kind != "status":
                     continue
                 message_id = str(event.get("message_id") or "").strip()
@@ -847,7 +856,16 @@ class ManagedAgentRuntime:
         while not self.stop_event.wait(timeout=5.0):
             returncode = process.poll()
             if returncode is None:
-                self._update_state(effective_state="running", last_seen_at=_now_iso(), last_error=None)
+                # PID alive is not activity. Do NOT refresh last_seen_at or clear
+                # last_error here: a sentinel that is alive but dead inside
+                # (wedged loop, deadlock, SIGSTOP'd, or platform connection
+                # silently gone) would otherwise keep a permanently fresh
+                # last_seen_at and render green forever, defeating the 75s/300s
+                # staleness ladder (ADR-008, #295). Freshness comes from the
+                # sentinel's relayed platform heartbeats (kind="heartbeat"
+                # exec-events); this poll stays only for fast exit detection.
+                # Re-affirm running so a transient state can't strand the row.
+                self._update_state(effective_state="running")
                 continue
             status = "stopped" if returncode == 0 else "error"
             error = None if returncode == 0 else f"Sentinel process exited with code {returncode}"

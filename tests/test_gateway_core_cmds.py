@@ -3813,3 +3813,91 @@ def test_channel_setup_no_ax_offline_without_flag(monkeypatch, tmp_path):
     write_channel_setup(agent_name="my-agent", workdir=workdir, env_path=env_path)
     env_text = env_path.read_text()
     assert "AX_OFFLINE" not in env_text
+
+
+def _sentinel_runtime(tmp_path):
+    """Minimal sentinel_inference_sdk runtime for unit-testing the monitor and
+    the stdout reader in isolation (#295). No process is started."""
+    token_file = tmp_path / "token"
+    token_file.write_text("axp_a_agent.secret")
+    return gateway_core.ManagedAgentRuntime(
+        {
+            "name": "sentinel-bot",
+            "agent_id": "agent-1",
+            "space_id": "space-1",
+            "base_url": "https://paxai.app",
+            "runtime_type": "sentinel_inference_sdk",
+            "token_file": str(token_file),
+        },
+        client_factory=lambda **kwargs: object(),
+    )
+
+
+def test_sentinel_heartbeat_event_refreshes_last_seen(tmp_path, monkeypatch):
+    """A relayed kind="heartbeat" exec-event refreshes last_seen_at — this is
+    the activity signal that replaces PID-existence stamping (#295)."""
+    monkeypatch.setenv("AX_CONFIG_DIR", str(tmp_path / "config"))
+    (tmp_path / "config").mkdir()
+    runtime = _sentinel_runtime(tmp_path)
+    stale = "2000-01-01T00:00:00+00:00"
+    runtime._update_state(last_seen_at=stale)
+
+    class _FakeProc:
+        stdout = iter(['AX_GATEWAY_EVENT {"kind": "heartbeat", "agent_name": "sentinel-bot", "space_id": "space-1"}\n'])
+
+    class _FakeLog:
+        def write(self, _s):
+            pass
+
+        def flush(self):
+            pass
+
+    runtime._consume_sentinel_stdout(_FakeProc(), _FakeLog())
+
+    assert runtime._state["last_seen_at"] != stale, "heartbeat event must refresh last_seen_at"
+
+
+def test_sentinel_monitor_pid_alive_does_not_launder_liveness(tmp_path, monkeypatch):
+    """PID-alive ticks must NOT refresh last_seen_at or clear last_error, so a
+    wedged-but-alive sentinel ages into the staleness ladder instead of staying
+    green forever (#295). Exit detection (poll != None) is unaffected."""
+    monkeypatch.setenv("AX_CONFIG_DIR", str(tmp_path / "config"))
+    (tmp_path / "config").mkdir()
+    runtime = _sentinel_runtime(tmp_path)
+    stale = "2000-01-01T00:00:00+00:00"
+    runtime._update_state(last_seen_at=stale, last_error="boom", effective_state="starting")
+
+    class _AliveProc:
+        def poll(self):
+            return None  # still running
+
+    runtime._supervised_process = _AliveProc()
+
+    # One alive tick then stop: wait() returns False (enter body), then True (exit).
+    with patch.object(runtime.stop_event, "wait", side_effect=[False, True]):
+        runtime._monitor_sentinel_inference_sdk_process()
+
+    assert runtime._state["last_seen_at"] == stale, "PID-alive tick must not refresh last_seen_at"
+    assert runtime._state["last_error"] == "boom", "PID-alive tick must not clear last_error"
+    assert runtime._state["effective_state"] == "running", "running is re-affirmed so the row isn't stranded"
+
+
+def test_sentinel_monitor_still_detects_clean_exit(tmp_path, monkeypatch):
+    """No regression in exit detection: a finished process flips to stopped/error."""
+    monkeypatch.setenv("AX_CONFIG_DIR", str(tmp_path / "config"))
+    (tmp_path / "config").mkdir()
+    runtime = _sentinel_runtime(tmp_path)
+
+    class _ExitedProc:
+        pid = 4242
+
+        def poll(self):
+            return 1  # non-zero exit
+
+    runtime._supervised_process = _ExitedProc()
+
+    with patch.object(runtime.stop_event, "wait", side_effect=[False, True]):
+        runtime._monitor_sentinel_inference_sdk_process()
+
+    assert runtime._state["effective_state"] == "error"
+    assert "exited with code 1" in (runtime._state.get("last_error") or "")

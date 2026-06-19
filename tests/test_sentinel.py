@@ -1371,3 +1371,49 @@ class TestAxAPIConstructor:
         api._client = mock_client
         api.close()
         mock_client.close.assert_called_once()
+
+
+class TestEmitGatewayHeartbeat:
+    """The sentinel relays platform liveness to the gateway as throttled
+    kind="heartbeat" AX_GATEWAY_EVENT lines, so the gateway's staleness ladder
+    tracks the live platform connection rather than PID existence (#295)."""
+
+    def test_emits_event_when_interval_elapsed(self, capsys):
+        from ax_cli.runtimes.hermes.sentinel import (
+            _GATEWAY_HEARTBEAT_MIN_INTERVAL,
+            _emit_gateway_heartbeat,
+        )
+
+        now = _GATEWAY_HEARTBEAT_MIN_INTERVAL + 1.0
+        new_ts = _emit_gateway_heartbeat("echo-bot", "space-1", 0.0, now=now)
+
+        assert new_ts == now  # recorded as the new last-emit
+        out = capsys.readouterr().out
+        lines = [ln[len("AX_GATEWAY_EVENT ") :] for ln in out.splitlines() if ln.startswith("AX_GATEWAY_EVENT ")]
+        assert lines, "expected a heartbeat AX_GATEWAY_EVENT line"
+        assert json.loads(lines[0]) == {
+            "kind": "heartbeat",
+            "agent_name": "echo-bot",
+            "space_id": "space-1",
+        }
+
+    def test_throttled_within_interval(self, capsys):
+        from ax_cli.runtimes.hermes.sentinel import (
+            _GATEWAY_HEARTBEAT_MIN_INTERVAL,
+            _emit_gateway_heartbeat,
+        )
+
+        last = 100.0
+        now = last + (_GATEWAY_HEARTBEAT_MIN_INTERVAL / 2.0)  # too soon
+        new_ts = _emit_gateway_heartbeat("echo-bot", "space-1", last, now=now)
+
+        assert new_ts == last  # unchanged — no emit
+        assert "AX_GATEWAY_EVENT" not in capsys.readouterr().out
+
+    def test_carries_no_credentials(self, capsys):
+        """The relayed event is liveness metadata only — never a token/body."""
+        from ax_cli.runtimes.hermes.sentinel import _emit_gateway_heartbeat
+
+        _emit_gateway_heartbeat("echo-bot", "space-1", 0.0, now=9999.0)
+        out = capsys.readouterr().out
+        assert "axp_" not in out and "Bearer" not in out and "token" not in out.lower()

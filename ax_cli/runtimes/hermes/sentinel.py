@@ -865,6 +865,7 @@ def run_cli(
         thread_id=thread_id,
     )
 
+
 # ---------------------------------------------------------------------------
 # Mention detection
 # ---------------------------------------------------------------------------
@@ -1166,6 +1167,39 @@ def mention_worker(
 
 
 # ---------------------------------------------------------------------------
+# Gateway liveness relay
+# ---------------------------------------------------------------------------
+
+# Minimum seconds between relayed gateway heartbeat events. The sentinel's
+# embedded SSE adapter relays platform liveness (connected/bootstrap/heartbeat/
+# ping) to the local gateway as kind="heartbeat" AX_GATEWAY_EVENT lines so the
+# gateway's staleness ladder (ADR-008) tracks the live platform connection
+# rather than PID existence (#295). Throttled so frequent platform pings don't
+# spam stdout; well under the 75s stale threshold so an idle-but-healthy
+# sentinel never ages into stale.
+_GATEWAY_HEARTBEAT_MIN_INTERVAL = 15.0
+
+
+def _emit_gateway_heartbeat(agent_name: str, space_id: str, last_emit: float, *, now: float) -> float:
+    """Relay a platform-liveness beat to the local gateway via AX_GATEWAY_EVENT.
+
+    Emits at most one ``kind="heartbeat"`` event per
+    ``_GATEWAY_HEARTBEAT_MIN_INTERVAL`` seconds. Returns the timestamp to record
+    as the last emit (unchanged when throttled or on emit failure). Pure except
+    for the stdout write, so the throttle is unit-testable.
+    """
+    if now - last_emit < _GATEWAY_HEARTBEAT_MIN_INTERVAL:
+        return last_emit
+    try:
+        event = {"kind": "heartbeat", "agent_name": agent_name, "space_id": space_id}
+        print(f"AX_GATEWAY_EVENT {json.dumps(event, sort_keys=True)}", flush=True)
+    except Exception as e:  # noqa: BLE001 — a relay failure must never kill the listener
+        log.debug(f"gateway heartbeat relay failed (non-fatal): {e}")
+        return last_emit
+    return now
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 
@@ -1228,6 +1262,9 @@ def run(args):
     SEEN_MAX = 500
 
     backoff = 1
+    # Throttle for the gateway liveness relay (#295). Persisted across SSE
+    # reconnects so a flapping connection can't spam heartbeat events.
+    last_gw_heartbeat = 0.0
 
     while True:
         try:
@@ -1256,9 +1293,17 @@ def run(args):
                             f"Listening for @{agent_name} mentions... "
                             f"(sessions: {sessions.count()}, queue: {mention_queue.qsize()})"
                         )
+                        last_gw_heartbeat = _emit_gateway_heartbeat(
+                            agent_name, space_id, last_gw_heartbeat, now=time.monotonic()
+                        )
                         continue
 
                     if event_type in ("bootstrap", "heartbeat", "identity_bootstrap", "ping"):
+                        # Relay platform liveness to the gateway so the staleness
+                        # ladder tracks the live connection, not PID existence (#295).
+                        last_gw_heartbeat = _emit_gateway_heartbeat(
+                            agent_name, space_id, last_gw_heartbeat, now=time.monotonic()
+                        )
                         continue
 
                     if event_type in ("message", "mention"):
