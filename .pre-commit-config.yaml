@@ -41,9 +41,9 @@ default_stages: [pre-commit]
 
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    # Pin matches the local ruff version being used (0.15.9 as of 2026-04-07).
+    # Pin matches the local ruff version being used (0.15.15 as of 2026-06-16).
     # Bump with `pre-commit autoupdate` and verify CI still passes.
-    rev: v0.15.9
+    rev: v0.15.15
     hooks:
       - id: ruff-check
         # Match CI scope: only ax_cli/ Python files. Other directories
@@ -62,7 +62,7 @@ repos:
     hooks:
       - id: ci-test-build
         name: CI tests, coverage, build, and twine check
-        entry: uv run --with build --with twine --with pytest-cov --with ruff scripts/ci-check.sh
+        entry: uv run --with build --with twine --with pytest-cov --with ruff==0.15.15 scripts/ci-check.sh
         language: system
         pass_filenames: false
         always_run: true

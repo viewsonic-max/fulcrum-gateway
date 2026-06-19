@@ -63,9 +63,12 @@ def hermes_setup_status(entry: dict[str, Any]) -> dict[str, Any]:
     # is "hermes" (the plugin is now the default template runtime).
     if runtime_type == "hermes_plugin":
         return {"ready": True, "template_id": template_id}
-    # sentinel_inference_sdk and bare hermes-template entries still run from the
-    # in-tree sentinel and need a hermes-agent checkout resolvable below.
-    if template_id != "hermes" and runtime_type != "sentinel_inference_sdk":
+    # sentinel_inference_sdk ships bundled with ax-cli and uses a gateway-owned
+    # venv under ~/.ax/runtimes/sentinel_inference_sdk/<client> — no hermes-agent
+    # checkout required. The venv is checked separately via `runtime status`.
+    if runtime_type == "sentinel_inference_sdk":
+        return {"ready": True, "template_id": template_id}
+    if template_id != "hermes":
         return {"ready": True, "template_id": template_id}
 
     candidates = _hermes_repo_candidates(entry)

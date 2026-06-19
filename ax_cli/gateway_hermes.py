@@ -47,18 +47,27 @@ def _sentinel_inference_sdk_script(entry: dict[str, Any]) -> Path:
     return bundled
 
 
+def sentinel_sdk_venv_root(client: str) -> Path:
+    """Gateway-owned venv root for sentinel_inference_sdk, scoped per client.
+
+    All agents on the same client share this venv — credentials and workdir
+    are per-agent and live elsewhere. Returns
+    ``~/.ax/runtimes/sentinel_inference_sdk/<client>``.
+    """
+    return Path.home() / ".ax" / "runtimes" / "sentinel_inference_sdk" / client
+
+
 def _sentinel_inference_sdk_python(entry: dict[str, Any]) -> str:
-    configured = str(entry.get("hermes_python") or entry.get("python") or "").strip()
+    # 1. Explicit per-agent override (set via `agents update --python`).
+    configured = str(entry.get("python") or "").strip()
     if configured:
         return configured
-    hermes_repo = str(entry.get("hermes_repo_path") or "").strip()
-    if hermes_repo:
-        candidate = Path(hermes_repo).expanduser() / ".venv" / "bin" / "python3"
+    # 2. Client-scoped shared venv under ~/.ax/runtimes/sentinel_inference_sdk/<client>.
+    client = str(entry.get("client") or "").strip()
+    if client:
+        candidate = sentinel_sdk_venv_root(client) / ".venv" / "bin" / "python3"
         if candidate.exists():
             return str(candidate)
-    default = Path("/home/ax-agent/shared/repos/hermes-agent/.venv/bin/python3")
-    if default.exists():
-        return str(default)
     return "python3"
 
 
@@ -116,27 +125,11 @@ def _gateway_environment_context(entry: dict[str, Any]) -> str:
         "back to the values in your local .ax/config.toml.",
     ]
 
-    # Append connector context if any connectors are registered.
-    try:
-        from .connectors import list_connectors
+    from .connectors.guidance import connector_instruction_lines, connector_ref_for_agent
 
-        connectors = list_connectors()
-        enabled = [c for c in connectors if c.enabled]
-        if enabled:
-            names = ", ".join(c.name for c in enabled)
-            lines.append("")
-            lines.append(f"CONNECTORS: {names}")
-            lines.append("IMPORTANT — when users ask about connectors, use ONLY these facts:")
-            lines.append(f"- You have connector tools. Always use connector={enabled[0].name!r} unless told otherwise.")
-            lines.append("- connector_apps: shows currently connected apps")
-            lines.append("- connector_search: finds action tools by use case")
-            lines.append("- connector_call: executes an action")
-            lines.append("- 500+ apps supported (Gmail, Slack, GitHub, Jira, etc.)")
-            lines.append("- To connect a NEW app the user must run:")
-            lines.append("    ax gateway connectors connect demo --app <app_name>")
-            lines.append("  DO NOT guess other commands. This is the only correct command.")
-    except Exception:
-        pass
+    connector_ref = connector_ref_for_agent(entry)
+    if connector_ref:
+        lines.extend(connector_instruction_lines(connector_ref))
 
     return "\n".join(lines)
 
@@ -166,8 +159,22 @@ _INFERENCE_SDK_CLIENTS = {
     "gemini_sdk",
     "leapfrog_sdk",
     "mistral_sdk",
+    "together_sdk",
     "xai_sdk",
 }
+
+
+def inference_sdk_client_names() -> list[str]:
+    """Sorted list of valid inference SDK client values for sentinel_inference_sdk.
+
+    Single source of truth for both validation (via `_INFERENCE_SDK_CLIENTS`)
+    and operator-facing help text. Help strings in `ax gateway agents add`
+    plus `ax gateway agents update` and the `sentinel_inference_sdk`
+    runtime-type description are derived from this helper so they cannot
+    drift from the accepted set when a new SDK runtime lands (see #326).
+    """
+    return sorted(_INFERENCE_SDK_CLIENTS)
+
 
 # Valid MCP host clients for sentinel_cli. Maps client value → binary name.
 # claude_code_channel always uses claude_cli and sets it automatically — operators
@@ -226,7 +233,6 @@ def _build_sentinel_inference_sdk_env(entry: dict[str, Any]) -> dict[str, str]:
     token = load_gateway_managed_agent_token(entry)
     workdir = _sentinel_inference_sdk_workdir(entry)
     agents_dir = _agents_dir_for_entry(entry)
-    hermes_repo = str(entry.get("hermes_repo_path") or "").strip() or "/home/ax-agent/shared/repos/hermes-agent"
     repo_root = str(_gateway_repo_root())
 
     # Per-agent HERMES_HOME so each hermes agent gets its own memories/ dir
@@ -248,7 +254,6 @@ def _build_sentinel_inference_sdk_env(entry: dict[str, Any]) -> dict[str, str]:
             "HERMES_MAX_ITERATIONS": str(
                 entry.get("hermes_max_iterations") or os.environ.get("HERMES_MAX_ITERATIONS") or 60
             ),
-            "HERMES_REPO_PATH": hermes_repo,
         }
     )
     if hermes_home is not None:
@@ -257,15 +262,10 @@ def _build_sentinel_inference_sdk_env(entry: dict[str, Any]) -> dict[str, str]:
     env.setdefault("AGENT_RUNNER_API_KEY", "staging-dispatch-key")
     env.setdefault("INTERNAL_DISPATCH_API_KEY", env["AGENT_RUNNER_API_KEY"])
 
-    # PYTHONPATH order matters — see ax_cli/runtimes/hermes/README.md.
-    # The vendored ax_cli/runtimes/hermes/ directory MUST come before the
-    # public NousResearch/hermes-agent clone so `from tools import
-    # _check_read_path` resolves to our security shim, while
-    # `from tools.registry import registry` falls through to the public
-    # hermes-agent. Operator override: `agents_dir/tools/__init__.py` on
-    # the EC2 host preserves the live-fleet workflow when present.
-    vendored_hermes_dir = Path(__file__).resolve().parent / "runtimes" / "hermes"
-    python_paths = [str(vendored_hermes_dir), str(agents_dir), hermes_repo, repo_root]
+    # sentinel_inference_sdk only imports stdlib and ax_cli.mentions — no
+    # hermes-agent dependency. PYTHONPATH only needs agents_dir (for any
+    # operator-local tools module) and repo_root (for ax_cli itself).
+    python_paths = [str(agents_dir), repo_root]
     existing_pythonpath = env.get("PYTHONPATH")
     if existing_pythonpath:
         python_paths.append(existing_pythonpath)

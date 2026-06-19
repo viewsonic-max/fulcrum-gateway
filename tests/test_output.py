@@ -6,7 +6,7 @@ import httpx
 import pytest
 import typer
 
-from ax_cli.output import handle_error, mention_prefix, print_table
+from ax_cli.output import handle_error, mention_prefix, print_table, unwrap_envelope
 
 
 def test_mention_prefix_whitespace_only():
@@ -31,6 +31,76 @@ def test_mention_prefix_already_prefixed():
 
 def test_mention_prefix_strips_whitespace():
     assert mention_prefix("  bob  ") == "@bob"
+
+
+# ---------- unwrap_envelope (GH #167) ----------
+#
+# Backend convention: single-resource GET / CREATE / UPDATE responses come back
+# as ``{<resource>: {...}}``. Each call site used to open-code the unwrap and
+# we kept missing it. The helper formalizes the pattern.
+
+
+def test_unwrap_envelope_wrapped_dict_returns_inner():
+    """The canonical case: server wrapped {"task": {...inner...}} and we
+    unwrap to ``inner``."""
+    inner = {"id": "task-1", "title": "Sample"}
+    wrapped = {"task": inner}
+    assert unwrap_envelope(wrapped, "task") is inner
+
+
+def test_unwrap_envelope_flat_dict_passes_through():
+    """Backend may already return flat (legacy or alternate endpoint).
+    The helper must be a no-op so we don't break those handlers."""
+    flat = {"id": "task-1", "title": "Sample"}
+    assert unwrap_envelope(flat, "task") is flat
+
+
+def test_unwrap_envelope_dict_missing_key_passes_through():
+    """If the key isn't present, return data unchanged (no narrowing,
+    no exception)."""
+    data = {"unrelated": "value"}
+    assert unwrap_envelope(data, "task") is data
+
+
+def test_unwrap_envelope_none_passes_through():
+    """``None`` is a legitimate response shape from some endpoints
+    (DELETE typically). The helper must be safe."""
+    assert unwrap_envelope(None, "task") is None
+
+
+def test_unwrap_envelope_list_passes_through():
+    """List responses (the common list-endpoint shape) must be returned
+    unchanged. We don't pretend a list is an envelope."""
+    items = [{"id": "1"}, {"id": "2"}]
+    assert unwrap_envelope(items, "task") is items
+
+
+def test_unwrap_envelope_scalar_passes_through():
+    """Scalars and strings — unusual but possible — should pass through
+    rather than crash."""
+    assert unwrap_envelope("plain string", "task") == "plain string"
+    assert unwrap_envelope(42, "task") == 42
+
+
+def test_unwrap_envelope_inner_value_not_dict_passes_through():
+    """If ``data[key]`` is a non-dict (scalar, list, None), don't unwrap.
+    The shape isn't really an envelope; ``data`` likely carries other
+    fields the caller needs.
+
+    Example: a token response like ``{"token": "axp_...", "expires_at": ...}``
+    isn't a ``{token: <wrapped object>}`` envelope — ``token`` is just one
+    field on a flat object."""
+    pat_response = {"token": "axp_secret", "expires_at": "2026-12-31"}
+    assert unwrap_envelope(pat_response, "token") is pat_response
+
+
+def test_unwrap_envelope_works_for_every_real_envelope_key():
+    """Smoke check against the resource keys we currently unwrap across
+    commands/."""
+    for key in ("task", "agent", "message", "space", "context"):
+        wrapped = {key: {"id": f"{key}-uuid"}}
+        unwrapped = unwrap_envelope(wrapped, key)
+        assert unwrapped == {"id": f"{key}-uuid"}, key
 
 
 def test_print_table_auto_keys(capsys):

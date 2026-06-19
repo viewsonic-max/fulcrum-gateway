@@ -12,6 +12,7 @@ Available runtimes:
   - groq_sdk:       Groq Python SDK, chat completions over GROQ_API_KEY
   - hermes_sdk:     Hermes-agent wrapper with 90-turn agentic loop
   - mistral_sdk:    Mistral Python SDK, chat completions over MISTRAL_API_KEY
+  - together_sdk:   Together AI via openai SDK pointed at api.together.xyz, TOGETHER_API_KEY
 
 Adding a new runtime:
   1. Create a module in runtimes/ (e.g., gemini_sdk.py)

@@ -1104,6 +1104,7 @@ def test_render_agent_persona_includes_connector_block_when_connector_ref_set(tm
     assert "CONNECTORS: composio-main" in output
     assert "connector='composio-main'" in output
     assert "connector_call" in output
+    assert "connect composio-main --app" in output
 
 
 def test_render_agent_persona_omits_connector_block_when_no_connector_ref(tmp_path):
@@ -1119,6 +1120,31 @@ def test_render_agent_persona_omits_connector_block_when_no_connector_ref(tmp_pa
 
     assert "CONNECTORS:" not in output
     assert "connector_call" not in output
+
+
+def test_system_prompt_and_agents_md_render_same_connector_block(tmp_path):
+    """Both renderers must emit identical connector guidance for the same agent."""
+    from ax_cli.commands.gateway_agents import _render_agent_persona_markdown
+    from ax_cli.connectors.guidance import render_connector_block
+    from ax_cli.gateway_hermes import _gateway_environment_context
+
+    entry = {
+        "name": "slack-output",
+        "runtime_type": "sentinel_inference_sdk",
+        "system_prompt": "Send Slack messages.",
+        "connector_ref": "composio-main",
+        "space_id": "space-1",
+        "base_url": "https://paxai.app",
+    }
+    expected = render_connector_block("composio-main")
+
+    agents_md = _render_agent_persona_markdown(entry, workdir=str(tmp_path))
+    system_prompt_env = _gateway_environment_context(entry)
+
+    assert expected in agents_md
+    assert expected in system_prompt_env
+    assert "connect demo --app" not in agents_md
+    assert "connect demo --app" not in system_prompt_env
 
 
 def test_channel_received_signal_fires_on_enqueue():

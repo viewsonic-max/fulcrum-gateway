@@ -9,6 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .gateway_hermes import inference_sdk_client_names
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
@@ -148,8 +150,8 @@ def runtime_type_catalog() -> dict[str, dict[str, Any]]:
             "label": "Inference SDK Sentinel",
             "description": (
                 "Gateway-supervised sentinel process making direct inference API calls "
-                "to vendor LLMs (openai_sdk, groq_sdk, mistral_sdk, gemini_sdk, "
-                "leapfrog_sdk, xai_sdk). Requires --client to select the SDK. "
+                f"to vendor LLMs ({', '.join(inference_sdk_client_names())}). "
+                "Requires --client to select the SDK. "
                 "Tool access is controlled by connector policy. "
                 "See ADR-012 for the rename history."
             ),

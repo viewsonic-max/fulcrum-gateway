@@ -171,6 +171,7 @@ from .gateway_hermes import (
     _sentinel_session_scope,
     _sentinel_tool_summary,
     _summarize_sentinel_command,
+    inference_sdk_client_names,
 )
 from .gateway_identity import (
     _UUID_RE,
@@ -532,6 +533,7 @@ __all__ = [
     "hermes_setup_status",
     "infer_asset_descriptor",
     "infer_operator_profile",
+    "inference_sdk_client_names",
     "issue_local_session",
     "list_gateway_approvals",
     "load_agent_pending_messages",

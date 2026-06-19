@@ -62,7 +62,7 @@ jobs:
           done
 
       - name: Run Nuclei
-        uses: projectdiscovery/nuclei-action@v2
+        uses: projectdiscovery/nuclei-action@v3
         with:
           target: http://127.0.0.1:8765
           output: nuclei-report.txt

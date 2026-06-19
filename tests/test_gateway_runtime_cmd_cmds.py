@@ -5,6 +5,7 @@ Ported from skipped test_gateway_commands*.py; monkeypatches target ax_cli.comma
 from __future__ import annotations
 
 import json
+import sys
 
 from typer.testing import CliRunner
 
@@ -247,3 +248,92 @@ class TestRuntimeStatusCommand:
         result = runner.invoke(app, ["gateway", "runtime", "status", "hermes"])
         assert result.exit_code != 0
         assert "not ready" in _strip(result.output).lower()
+
+
+class TestRuntimeAuth:
+    """ax gateway runtime auth write/status/clear (#263)."""
+
+    def _redirect_codex_path(self, monkeypatch, tmp_path):
+        path = tmp_path / ".ax" / "codex-token"
+        monkeypatch.setitem(_gw_runtime._RUNTIME_AUTH_PROVIDERS["openai-codex"], "path", path)
+        return path
+
+    def test_write_then_status_and_clear(self, monkeypatch, tmp_path):
+        path = self._redirect_codex_path(monkeypatch, tmp_path)
+
+        # write
+        result = runner.invoke(
+            app, ["gateway", "runtime", "auth", "write", "openai-codex", "CODEX_TOKEN=sk-codex-123", "--json"]
+        )
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.stdout)
+        assert payload["provider"] == "openai-codex"
+        assert payload["exists"] is True
+        # bare-token file, trailing newline, never echoes the value in output
+        assert path.read_text(encoding="utf-8") == "sk-codex-123\n"
+        assert "sk-codex-123" not in result.stdout
+        # credential file is owner-only on POSIX (never world/group-readable)
+        if sys.platform != "win32":
+            assert (path.stat().st_mode & 0o077) == 0
+
+        # status reports presence, not the value (assert via JSON — the human
+        # output soft-wraps long paths across lines under Rich's 80-col default)
+        result = runner.invoke(app, ["gateway", "runtime", "auth", "status", "openai-codex", "--json"])
+        assert result.exit_code == 0, result.output
+        status = json.loads(result.stdout)
+        assert status["exists"] is True
+        assert status["path"] == str(path)
+        assert "sk-codex-123" not in result.stdout
+
+        # clear removes it
+        result = runner.invoke(app, ["gateway", "runtime", "auth", "clear", "openai-codex", "--json"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["auth_removed"] is True
+        assert not path.exists()
+
+    def test_write_rejects_ax_pat(self, monkeypatch, tmp_path):
+        path = self._redirect_codex_path(monkeypatch, tmp_path)
+        result = runner.invoke(
+            app, ["gateway", "runtime", "auth", "write", "openai-codex", "CODEX_TOKEN=axp_u_notacodextoken"]
+        )
+        assert result.exit_code == 1
+        assert "Refusing to store" in _strip(result.output)
+        assert not path.exists()
+
+    def test_write_unknown_provider(self, monkeypatch, tmp_path):
+        self._redirect_codex_path(monkeypatch, tmp_path)
+        result = runner.invoke(app, ["gateway", "runtime", "auth", "write", "bogus", "CODEX_TOKEN=x"])
+        assert result.exit_code == 1
+        assert "Unknown runtime provider" in _strip(result.output)
+
+    def test_write_missing_expected_key(self, monkeypatch, tmp_path):
+        self._redirect_codex_path(monkeypatch, tmp_path)
+        result = runner.invoke(app, ["gateway", "runtime", "auth", "write", "openai-codex", "WRONG_KEY=x"])
+        assert result.exit_code == 1
+        assert "expects CODEX_TOKEN" in _strip(result.output)
+
+    def test_status_when_absent(self, monkeypatch, tmp_path):
+        self._redirect_codex_path(monkeypatch, tmp_path)
+        result = runner.invoke(app, ["gateway", "runtime", "auth", "status", "openai-codex"])
+        assert result.exit_code == 0, result.output
+        out = _strip(result.output)
+        assert "No credential stored" in out
+        assert "auth write openai-codex CODEX_TOKEN=" in out
+
+    def test_status_flags_stored_ax_pat(self, monkeypatch, tmp_path):
+        # Defense-in-depth: a pre-existing ~/.ax/codex-token holding an aX PAT
+        # (the historical misconfig) is flagged without echoing the value.
+        path = self._redirect_codex_path(monkeypatch, tmp_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("axp_u_legacy.pat\n", encoding="utf-8")
+        result = runner.invoke(app, ["gateway", "runtime", "auth", "status", "openai-codex", "--json"])
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.stdout)
+        assert payload["exists"] is True
+        assert "looks_invalid" in payload
+
+    def test_clear_when_absent(self, monkeypatch, tmp_path):
+        self._redirect_codex_path(monkeypatch, tmp_path)
+        result = runner.invoke(app, ["gateway", "runtime", "auth", "clear", "openai-codex"])
+        assert result.exit_code == 0, result.output
+        assert "No credential stored" in _strip(result.output)

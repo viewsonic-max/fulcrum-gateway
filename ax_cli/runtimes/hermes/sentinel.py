@@ -107,9 +107,10 @@ def parse_args():
             "mistral_sdk",
             "gemini_sdk",
             "leapfrog_sdk",
+            "together_sdk",
         ],
         default="hermes_sdk",
-        help="SDK runtime: openai_sdk, openrouter_sdk, hermes_sdk, groq_sdk, mistral_sdk, gemini_sdk, leapfrog_sdk",
+        help="SDK runtime: openai_sdk, openrouter_sdk, hermes_sdk, groq_sdk, mistral_sdk, gemini_sdk, leapfrog_sdk, together_sdk",
     )
     return parser.parse_args()
 

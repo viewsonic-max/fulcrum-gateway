@@ -10,7 +10,7 @@ import httpx
 import typer
 
 from ..config import get_client, resolve_space_id
-from ..output import JSON_OPTION, console, handle_error, mention_prefix, print_json, print_table
+from ..output import JSON_OPTION, console, handle_error, mention_prefix, print_json, print_table, unwrap_envelope
 
 app = typer.Typer(name="apps", help="MCP app signal adapter", no_args_is_help=True)
 
@@ -485,7 +485,7 @@ def signal(
         handle_error(exc)
 
     result = {
-        "message": data.get("message", data),
+        "message": unwrap_envelope(data, "message"),
         "app": app_key,
         "resource_uri": spec["resource_uri"],
         "tool_call_id": tool_call_id,

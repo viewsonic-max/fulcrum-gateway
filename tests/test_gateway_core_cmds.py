@@ -2935,7 +2935,7 @@ def test_proactive_binary_check_catches_missing_python(monkeypatch, tmp_path):
             "base_url": "https://paxai.app",
             "runtime_type": "sentinel_inference_sdk",
             "token_file": str(tmp_path / "tok"),
-            "hermes_python": missing_python,
+            "python": missing_python,
             "last_runtime_error_at": long_ago,
             "consecutive_setup_errors": 0,
         },
@@ -3525,6 +3525,52 @@ def test_resolve_inference_client_accepts_every_allowlisted_client(client_name):
     """
     entry = {"name": "ada", "client": client_name}
     assert gateway_core._resolve_inference_client(entry) == client_name
+
+
+def test_inference_sdk_client_names_returns_sorted_allowlist():
+    """The public helper exposes the allowlist as a sorted list so help
+    text and runtime-type descriptions can be generated from a single
+    source of truth, closing the recurring `--client` help drift
+    documented in #326.
+    """
+    names = gateway_core.inference_sdk_client_names()
+    assert names == sorted(gateway_core._INFERENCE_SDK_CLIENTS)
+    assert names == sorted(names), "helper output must already be sorted"
+    # Every name accepted by the resolver must be advertised by the helper.
+    for client_name in gateway_core._INFERENCE_SDK_CLIENTS:
+        assert client_name in names
+
+
+def test_client_help_text_advertises_every_allowlisted_runtime():
+    """Regression guard for #326. The `--client` help text on `ax gateway
+    agents add` / `update` is generated from `inference_sdk_client_names()`
+    so a new runtime added to `_INFERENCE_SDK_CLIENTS` must propagate to
+    the operator-facing help text automatically.
+    """
+    from ax_cli.commands.gateway_agents import _CLIENT_HELP
+
+    for client_name in gateway_core._INFERENCE_SDK_CLIENTS:
+        assert client_name in _CLIENT_HELP, (
+            f"--client help text drift, {client_name!r} is in the allowlist "
+            f"but not in the help string. The help string is now generated "
+            f"from inference_sdk_client_names() so this assertion failing "
+            f"means a regression that hardcoded the help list back."
+        )
+
+
+def test_sentinel_inference_sdk_description_advertises_every_allowlisted_runtime():
+    """Regression guard for #326. The `sentinel_inference_sdk` runtime-type
+    description in the catalog is generated from `inference_sdk_client_names()`
+    so it cannot drift from the accepted set.
+    """
+    from ax_cli.gateway_runtime_types import runtime_type_catalog
+
+    description = runtime_type_catalog()["sentinel_inference_sdk"]["description"]
+    for client_name in gateway_core._INFERENCE_SDK_CLIENTS:
+        assert client_name in description, (
+            f"sentinel_inference_sdk description drift, {client_name!r} is in "
+            f"the allowlist but not in the catalog description."
+        )
 
 
 def test_resolve_inference_client_returns_none_for_unknown_values():

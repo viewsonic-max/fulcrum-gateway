@@ -6,8 +6,8 @@ from typing import Optional
 import httpx
 import typer
 
-from ..config import get_client, resolve_gateway_config, resolve_space_id, resolve_token, save_space_id
-from ..output import JSON_OPTION, console, handle_error, print_json, print_kv, print_table
+from ..config import get_client, resolve_gateway_config, resolve_space_id, save_space_id
+from ..output import JSON_OPTION, console, handle_error, print_json, print_kv, print_table, unwrap_envelope
 
 log = logging.getLogger("ax.spaces")
 
@@ -107,7 +107,7 @@ def create(
         result = client.create_space(name, description=description, visibility=visibility)
     except httpx.HTTPStatusError as e:
         handle_error(e)
-    space = result.get("space", result) if isinstance(result, dict) else result
+    space = unwrap_envelope(result, "space")
     if as_json:
         print_json(space)
     else:
@@ -183,10 +183,11 @@ def get_space(
         data = client.get_space(space_id)
     except httpx.HTTPStatusError as e:
         handle_error(e)
+    space = unwrap_envelope(data, "space")
     if as_json:
-        print_json(data)
+        print_json(space)
     else:
-        print_kv(data)
+        print_kv(space) if isinstance(space, dict) else print_kv(data)
 
 
 @app.command("members")
@@ -214,113 +215,3 @@ def members(
             members_list,
             keys=["display_name", "type", "role"],
         )
-
-
-def _require_user_principal(action: str, *, allow_agent: bool) -> None:
-    """Gate destructive space mutations to user identity.
-
-    Per the trust-boundary charter, archive/leave should be user-authored, not
-    issued from a Gateway-brokered agent runtime (a pass-through agent could
-    otherwise archive the space hosting itself). Refuse an agent PAT (``axp_a_``)
-    unless the operator explicitly opts in with ``--allow-agent``.
-    """
-    if allow_agent:
-        return
-    token = resolve_token()
-    if token and token.startswith("axp_a_"):
-        console.print(
-            f"[red]{action} requires user identity[/red] — the active principal is an "
-            "agent PAT (axp_a_). Run as a user (`ax login`), or pass --allow-agent if this is intended."
-        )
-        raise typer.Exit(1)
-
-
-def _resolved_space_identity(client, space: str) -> tuple[str, str]:
-    """Resolve a name/slug/id argument to (space_id, display label). Fails closed
-    on ambiguous names via resolve_space_id (#47/#48)."""
-    sid = resolve_space_id(client, explicit=space)
-    space_row = _find_space(client, sid) or {}
-    return sid, _space_label(space_row, sid)
-
-
-@app.command("archive")
-def archive_space(
-    space: str = typer.Argument(..., help="Space id, slug, or name to archive"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
-    allow_agent: bool = typer.Option(False, "--allow-agent", help="Permit an agent PAT to run this (default: refuse)"),
-    as_json: bool = JSON_OPTION,
-):
-    """Archive a space — removes it from active workflows (reversible).
-
-    Spaces cannot be hard-deleted; archive is the soft-delete. Restore from the web UI.
-    """
-    _require_user_principal("Archiving a space", allow_agent=allow_agent)
-    client = get_client()
-    sid, label = _resolved_space_identity(client, space)
-    if not yes and not typer.confirm(f"Archive {label} ({sid})?"):
-        console.print("Aborted.")
-        raise typer.Exit(1)
-    try:
-        result = client.archive_space(sid)
-    except httpx.HTTPStatusError as e:
-        handle_error(e)
-    if as_json:
-        print_json(result if isinstance(result, dict) else {"space_id": sid, "is_archived": True})
-        return
-    console.print(f"[green]Archived:[/green] {label} ({sid})")
-    console.print("[dim]Reversible — restore from the web UI.[/dim]")
-
-
-@app.command("leave")
-def leave_space(
-    space: str = typer.Argument(..., help="Space id, slug, or name to leave"),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
-    allow_agent: bool = typer.Option(False, "--allow-agent", help="Permit an agent PAT to run this (default: refuse)"),
-    as_json: bool = JSON_OPTION,
-):
-    """Leave a space — removes you from its membership."""
-    _require_user_principal("Leaving a space", allow_agent=allow_agent)
-    client = get_client()
-    sid, label = _resolved_space_identity(client, space)
-    # Show the blast radius (shared workspace vs. a space you're alone in) in the
-    # prompt. Best-effort: a member-count lookup failure must not block the leave.
-    member_count: int | None = None
-    try:
-        data = client.list_space_members(sid)
-        members_list = data if isinstance(data, list) else data.get("members", [])
-        member_count = len(members_list)
-    except httpx.HTTPStatusError:
-        # Fail-soft: a permission or transport error must not block the leave.
-        # Log at debug (visible under -v) so a swallowed programming error from
-        # a future refactor is still traceable by maintainers (issue #203).
-        log.debug("member-count lookup failed during `ax spaces leave`", exc_info=True)
-        member_count = None
-    if not yes:
-        blast = f" (you are 1 of {member_count} members)" if member_count else ""
-        if not typer.confirm(f"Leave {label} ({sid}){blast}?"):
-            console.print("Aborted.")
-            raise typer.Exit(1)
-    try:
-        result = client.leave_space(sid)
-    except httpx.HTTPStatusError as e:
-        handle_error(e)
-    if as_json:
-        print_json(result if isinstance(result, dict) else {"space_id": sid, "left": True})
-        return
-    console.print(f"[green]Left:[/green] {label} ({sid})")
-
-
-@app.command("delete")
-def delete_space(
-    space: Optional[str] = typer.Argument(None, help="(unsupported)"),
-):
-    """Not supported — spaces are soft-deleted via `ax spaces archive`.
-
-    Hard delete is intentionally absent (the backend DELETE route is unregistered).
-    """
-    console.print(
-        "[yellow]Spaces cannot be hard-deleted.[/yellow] Use "
-        "[bold]ax spaces archive <space>[/bold] to remove a space from active "
-        "workflows (reversible). Hard delete is intentionally not offered."
-    )
-    raise typer.Exit(2)

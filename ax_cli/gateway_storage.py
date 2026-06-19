@@ -5,6 +5,7 @@ Extracted from ``ax_cli/gateway.py`` (issue #28 Phase 2).
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
 import json
@@ -22,6 +23,36 @@ from .config import _global_config_dir
 from .gateway_constants import _GATEWAY_PROCESS_RE, _GATEWAY_UI_PROCESS_RE, DEFAULT_ACTIVITY_LIMIT, phase_for_event
 
 _ACTIVITY_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _exclusive_activity_lock(path: Path):
+    """Cross-process exclusive lock for the activity log write path.
+
+    Uses fcntl.flock(LOCK_EX) on a companion .lock file on POSIX systems so
+    two separate ax/gateway processes can't interleave their read-modify-append
+    and produce a forked chain (duplicate seq + prev_hash_mismatch).
+
+    Falls back to the in-process threading.Lock on platforms where fcntl is
+    unavailable (Windows), which preserves the pre-existing within-process
+    guarantee without crashing.
+
+    Note: on network filesystems where flock is a silent no-op (e.g. NFS
+    without lockd), the cross-process guarantee degrades to in-process only.
+    """
+    try:
+        import fcntl as _fcntl
+    except ImportError:
+        with _ACTIVITY_LOCK:
+            yield
+        return
+    lock_path = path.with_suffix(".lock")
+    with lock_path.open("w") as _lf:
+        _fcntl.flock(_lf.fileno(), _fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            _fcntl.flock(_lf.fileno(), _fcntl.LOCK_UN)
 
 
 def _chmod_quiet(path: Path, mode: int) -> None:
@@ -1130,7 +1161,7 @@ def record_gateway_activity(
 
     path = activity_log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with _ACTIVITY_LOCK:
+    with _exclusive_activity_lock(path):
         last_seq, last_hash = _read_last_chain_state(path)
         record["seq"] = last_seq + 1
         record["prev_hash"] = last_hash

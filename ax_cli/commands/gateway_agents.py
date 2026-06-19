@@ -43,6 +43,7 @@ from ..gateway import (
     gateway_dir,
     get_gateway_approval,
     hermes_setup_status,
+    inference_sdk_client_names,
     load_agent_pending_messages,
     load_gateway_managed_agent_token,
     load_gateway_registry,
@@ -65,6 +66,17 @@ from ..manifest_template_library import (
 )
 from ..output import JSON_OPTION, console, err_console, print_json, print_kv, print_table
 from .gateway_app import _UNSET, agents_app
+
+# Operator-facing help text for the --client option on `ax gateway agents
+# add` and `ax gateway agents update`. Generated from the allowlist
+# (via `inference_sdk_client_names()`) so adding a new SDK runtime to
+# `_INFERENCE_SDK_CLIENTS` in `gateway_hermes.py` updates this text
+# automatically. Closes the recurring help-text drift gap from #326.
+_CLIENT_HELP = (
+    "MCP host or inference SDK client "
+    f"(claude_cli for sentinel_cli; {' | '.join(inference_sdk_client_names())} "
+    "for sentinel_inference_sdk). Not accepted for claude_code_channel."
+)
 
 # Agents-list cache: serves last-good upstream response when paxai.app
 # rate-limits us, mirroring the spaces cache pattern in PR #148. The cache
@@ -590,21 +602,9 @@ def _render_agent_persona_markdown(entry: dict, *, workdir: str) -> str:
             "```\n"
         )
     )
-    connector_ref = str(entry.get("connector_ref") or "").strip()
-    connector_block = ""
-    if connector_ref:
-        connector_block = (
-            f"\nCONNECTORS: {connector_ref}\n"
-            "IMPORTANT — when using connectors, use ONLY these facts:\n"
-            f"- You have connector tools. Always use connector={connector_ref!r} unless told otherwise.\n"
-            "- connector_apps: shows currently connected apps\n"
-            "- connector_search: finds action tools by use case\n"
-            "- connector_call: executes an action\n"
-            "- 500+ apps supported (Gmail, Slack, GitHub, Jira, etc.)\n"
-            "- To connect a NEW app the user must run:\n"
-            "    ax gateway connectors connect demo --app <app_name>\n"
-            "  DO NOT guess other commands. This is the only correct command.\n"
-        )
+    from ..connectors.guidance import connector_ref_for_agent, render_connector_block
+
+    connector_block = render_connector_block(connector_ref_for_agent(entry) or "")
 
     return f"""# `@{name}` — aX agent context
 
@@ -866,8 +866,19 @@ def _update_managed_agent(
         sp_value = str(system_prompt).strip() if system_prompt else ""  # type: ignore[arg-type]
         upstream_fields["system_prompt"] = sp_value or None
     if upstream_fields:
+        import httpx as _httpx
+
         client = _load_gateway_user_client()
-        client.update_agent(name, **upstream_fields)
+        try:
+            client.update_agent(name, **upstream_fields)
+        except _httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise ValueError(
+                    f"Agent '{name}' was not found on the platform (404). "
+                    "The upstream registration may have been deleted or the gateway may be pointed at a different environment. "
+                    "Use `ax gateway agents remove` then `ax gateway agents add` to re-register."
+                ) from exc
+            raise
     if system_prompt is not _UNSET:
         sp_value = str(system_prompt).strip() if system_prompt else ""  # type: ignore[arg-type]
         if sp_value:
@@ -1606,7 +1617,7 @@ def add_agent(
     client: str = typer.Option(
         None,
         "--client",
-        help="MCP host or inference SDK client (claude_cli for sentinel_cli; openai_sdk | gemini_sdk | groq_sdk | mistral_sdk | leapfrog_sdk | xai_sdk for sentinel_inference_sdk). Not accepted for claude_code_channel.",
+        help=_CLIENT_HELP,
     ),
     start: bool = typer.Option(True, "--start/--no-start", help="Desired running state after registration"),
     as_json: bool = JSON_OPTION,
@@ -1744,7 +1755,7 @@ def update_agent(
     client: str = typer.Option(
         None,
         "--client",
-        help="MCP host or inference SDK client (claude_cli for sentinel_cli; openai_sdk | gemini_sdk | groq_sdk | mistral_sdk | leapfrog_sdk | xai_sdk for sentinel_inference_sdk). Not accepted for claude_code_channel.",
+        help=_CLIENT_HELP,
     ),
     python_path: str = typer.Option(
         None,

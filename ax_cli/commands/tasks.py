@@ -8,7 +8,16 @@ import httpx
 import typer
 
 from ..config import get_client, resolve_gateway_config, resolve_space_id
-from ..output import JSON_OPTION, console, handle_error, mention_prefix, print_json, print_kv, print_table
+from ..output import (
+    JSON_OPTION,
+    console,
+    handle_error,
+    mention_prefix,
+    print_json,
+    print_kv,
+    print_table,
+    unwrap_envelope,
+)
 from .messages import _gateway_local_call, _gateway_local_connect
 
 app = typer.Typer(name="tasks", help="Task operations", no_args_is_help=True)
@@ -301,7 +310,7 @@ def create(
             priority=priority,
             space_id=gateway_space_id,
         )
-        task = data.get("task", data)
+        task = unwrap_envelope(data, "task")
         if as_json:
             print_json(task)
         else:
@@ -329,7 +338,7 @@ def create(
     except RuntimeError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
-    task = data.get("task", data)
+    task = unwrap_envelope(data, "task")
     if isinstance(task, dict):
         task = _annotate_task_space(task, space_info)
     tid = str(task.get("id", ""))[:8]
@@ -436,7 +445,7 @@ def get(
             data = client.get_task(task_id)
         except httpx.HTTPStatusError as e:
             handle_error(e)
-    task = data.get("task", data) if isinstance(data, dict) else data
+    task = unwrap_envelope(data, "task")
     if as_json:
         print_json(task)
     else:
@@ -482,7 +491,7 @@ def update(
             data = client.update_task(task_id, **fields)
         except httpx.HTTPStatusError as e:
             handle_error(e)
-    task = data.get("task", data) if isinstance(data, dict) else data
+    task = unwrap_envelope(data, "task")
     if as_json:
         print_json(task)
     else:

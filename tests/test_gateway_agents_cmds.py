@@ -1236,6 +1236,7 @@ def test_gateway_agents_test_blocks_attached_session_until_connected(monkeypatch
 def test_gateway_agents_doctor_persists_structured_result(monkeypatch, tmp_path):
     config_dir = tmp_path / "config"
     monkeypatch.setenv("AX_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("AX_OFFLINE", "1")  # skip upstream_existence HTTP check
     gateway_core.save_gateway_session(
         {
             "token": "axp_u_test.token",
@@ -2662,3 +2663,200 @@ def test_remove_agent_no_warn_when_no_workdir(monkeypatch, tmp_path):
     result = runner.invoke(app, ["gateway", "agents", "remove", "no-workdir-bot"])
     assert result.exit_code == 0
     assert "Warning" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# upstream_existence doctor check (#245)
+# ---------------------------------------------------------------------------
+
+
+def _seed_doctor_agent(monkeypatch, tmp_path):
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("AX_CONFIG_DIR", str(config_dir))
+    gateway_core.save_gateway_session(
+        {"token": "axp_u_test.token", "base_url": "https://paxai.app", "space_id": "space-1", "username": "codex"}
+    )
+    token_file = tmp_path / "agent.token"
+    token_file.write_text("axp_a_agent.secret")
+    registry = gateway_core.load_gateway_registry()
+    registry["agents"] = [
+        {
+            "name": "scout",
+            "agent_id": "agent-scout",
+            "space_id": "space-1",
+            "base_url": "https://paxai.app",
+            "runtime_type": "inbox",
+            "template_id": "inbox",
+            "desired_state": "running",
+            "effective_state": "stopped",
+            "token_file": str(token_file),
+            "transport": "gateway",
+            "credential_source": "gateway",
+        }
+    ]
+    gateway_core.save_gateway_registry(registry)
+    return registry
+
+
+def test_doctor_upstream_existence_passes_when_agent_found(monkeypatch, tmp_path):
+    _seed_doctor_agent(monkeypatch, tmp_path)
+
+    class _FoundClient:
+        def get_agent(self, identifier):
+            return {"id": identifier, "name": "scout"}
+
+    from ax_cli.commands import gateway_diagnostics as _gw_diag
+
+    monkeypatch.setattr(_gw_diag, "_load_gateway_user_client", lambda: _FoundClient())
+
+    result = runner.invoke(app, ["gateway", "agents", "doctor", "scout", "--json"])
+    assert result.exit_code == 0, result.output
+    checks = {c["name"]: c for c in json.loads(result.stdout)["checks"]}
+    assert "upstream_existence" in checks
+    assert checks["upstream_existence"]["status"] == "passed"
+
+
+def test_doctor_upstream_existence_fails_on_404(monkeypatch, tmp_path):
+    _seed_doctor_agent(monkeypatch, tmp_path)
+
+    class _NotFoundClient:
+        def get_agent(self, identifier):
+            req = httpx.Request("GET", f"https://paxai.app/api/v1/agents/manage/{identifier}")
+            resp = httpx.Response(404, request=req)
+            raise httpx.HTTPStatusError("404", request=req, response=resp)
+
+    from ax_cli.commands import gateway_diagnostics as _gw_diag
+
+    monkeypatch.setattr(_gw_diag, "_load_gateway_user_client", lambda: _NotFoundClient())
+
+    result = runner.invoke(app, ["gateway", "agents", "doctor", "scout", "--json"])
+    assert result.exit_code == 0, result.output
+    checks = {c["name"]: c for c in json.loads(result.stdout)["checks"]}
+    assert checks["upstream_existence"]["status"] == "failed"
+    assert "404" in checks["upstream_existence"]["detail"]
+    assert "remove" in checks["upstream_existence"]["detail"]
+
+
+def test_doctor_upstream_existence_warns_on_connection_error(monkeypatch, tmp_path):
+    _seed_doctor_agent(monkeypatch, tmp_path)
+
+    class _UnreachableClient:
+        def get_agent(self, identifier):
+            raise ConnectionError("network unreachable")
+
+    from ax_cli.commands import gateway_diagnostics as _gw_diag
+
+    monkeypatch.setattr(_gw_diag, "_load_gateway_user_client", lambda: _UnreachableClient())
+
+    result = runner.invoke(app, ["gateway", "agents", "doctor", "scout", "--json"])
+    assert result.exit_code == 0, result.output
+    checks = {c["name"]: c for c in json.loads(result.stdout)["checks"]}
+    assert checks["upstream_existence"]["status"] == "warning"
+
+
+def test_doctor_upstream_existence_skipped_in_offline_mode(monkeypatch, tmp_path):
+    _seed_doctor_agent(monkeypatch, tmp_path)
+    monkeypatch.setenv("AX_OFFLINE", "1")
+
+    result = runner.invoke(app, ["gateway", "agents", "doctor", "scout", "--json"])
+    assert result.exit_code == 0, result.output
+    check_names = [c["name"] for c in json.loads(result.stdout)["checks"]]
+    assert "upstream_existence" not in check_names
+
+
+def test_doctor_upstream_existence_warns_on_non_404_http_error(monkeypatch, tmp_path):
+    _seed_doctor_agent(monkeypatch, tmp_path)
+
+    class _ServerErrorClient:
+        def get_agent(self, identifier):
+            req = httpx.Request("GET", f"https://paxai.app/api/v1/agents/manage/{identifier}")
+            resp = httpx.Response(500, request=req)
+            raise httpx.HTTPStatusError("500", request=req, response=resp)
+
+    from ax_cli.commands import gateway_diagnostics as _gw_diag
+
+    monkeypatch.setattr(_gw_diag, "_load_gateway_user_client", lambda: _ServerErrorClient())
+
+    result = runner.invoke(app, ["gateway", "agents", "doctor", "scout", "--json"])
+    assert result.exit_code == 0, result.output
+    checks = {c["name"]: c for c in json.loads(result.stdout)["checks"]}
+    assert checks["upstream_existence"]["status"] == "warning"
+    assert "500" in checks["upstream_existence"]["detail"]
+
+
+def test_doctor_upstream_existence_warns_when_no_agent_id(monkeypatch, tmp_path):
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("AX_CONFIG_DIR", str(config_dir))
+    gateway_core.save_gateway_session(
+        {"token": "axp_u_test.token", "base_url": "https://paxai.app", "space_id": "space-1", "username": "codex"}
+    )
+    token_file = tmp_path / "agent.token"
+    token_file.write_text("axp_a_agent.secret")
+    registry = gateway_core.load_gateway_registry()
+    registry["agents"] = [
+        {
+            "name": "orphan",
+            "space_id": "space-1",
+            "base_url": "https://paxai.app",
+            "runtime_type": "inbox",
+            "template_id": "inbox",
+            "desired_state": "running",
+            "effective_state": "stopped",
+            "token_file": str(token_file),
+            "transport": "gateway",
+            "credential_source": "gateway",
+        }
+    ]
+    gateway_core.save_gateway_registry(registry)
+
+    result = runner.invoke(app, ["gateway", "agents", "doctor", "orphan", "--json"])
+    assert result.exit_code == 0, result.output
+    checks = {c["name"]: c for c in json.loads(result.stdout)["checks"]}
+    assert checks["upstream_existence"]["status"] == "warning"
+    assert "agent_id" in checks["upstream_existence"]["detail"]
+
+
+# ---------------------------------------------------------------------------
+# update 404 handling (#245)
+# ---------------------------------------------------------------------------
+
+
+def test_update_agent_404_raises_actionable_error(monkeypatch, tmp_path):
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("AX_CONFIG_DIR", str(config_dir))
+    gateway_core.save_gateway_session(
+        {"token": "axp_u_test.token", "base_url": "https://paxai.app", "space_id": "space-1", "username": "codex"}
+    )
+    token_file = tmp_path / "agent.token"
+    token_file.write_text("axp_a_agent.secret")
+    registry = gateway_core.load_gateway_registry()
+    entry = {
+        "name": "ghost",
+        "agent_id": "agent-ghost",
+        "space_id": "space-1",
+        "base_url": "https://paxai.app",
+        "runtime_type": "echo",
+        "template_id": "echo",
+        "desired_state": "running",
+        "effective_state": "running",
+        "token_file": str(token_file),
+        "transport": "gateway",
+        "credential_source": "gateway",
+    }
+    registry["agents"] = [entry]
+    gateway_core.ensure_local_asset_binding(registry, entry, created_via="cli", auto_approve=True)
+    gateway_core.ensure_gateway_identity_binding(registry, entry, session=gateway_core.load_gateway_session())
+    gateway_core.save_gateway_registry(registry)
+
+    class _NotFoundUserClient:
+        def update_agent(self, identifier, **kwargs):
+            req = httpx.Request("PUT", f"https://paxai.app/api/v1/agents/manage/{identifier}")
+            resp = httpx.Response(404, request=req)
+            raise httpx.HTTPStatusError("404", request=req, response=resp)
+
+    monkeypatch.setattr(_gw_agents, "_load_gateway_user_client", lambda: _NotFoundUserClient())
+
+    result = runner.invoke(app, ["gateway", "agents", "update", "ghost", "--description", "hi"])
+    assert result.exit_code == 1
+    assert "not found on the platform" in result.output
+    assert "remove" in result.output

@@ -18,13 +18,14 @@ from ..gateway import (
     load_gateway_session,
     ollama_setup_status,
 )
+from ..gateway_hermes import sentinel_sdk_venv_root
 from ..gateway_runtime_types import (
     agent_template_list,
     runtime_type_definition,
     runtime_type_list,
 )
 from ..output import JSON_OPTION, err_console, print_json, print_table
-from .gateway_app import app, runtime_app
+from .gateway_app import app, runtime_app, runtime_auth_app
 
 
 def _normalize_runtime_type(runtime_type: str) -> str:
@@ -172,10 +173,10 @@ _RUNTIME_INSTALL_RECIPES: dict[str, dict] = {
         "install_steps": ("clone", "venv", "pip_install", "verify"),
     },
     "sentinel_inference_sdk": {
-        # No clone — creates a dedicated venv and installs the openai package.
-        # Target matches the default python path resolved by
-        # _sentinel_inference_sdk_python() so agents pick it up automatically.
-        "target_relative": "hermes-agent",
+        # No clone — creates a client-scoped venv under
+        # ~/.ax/runtimes/sentinel_inference_sdk/<client> and installs the
+        # client package. Target is computed from sentinel_sdk_venv_root(client)
+        # at install time; target_relative is unused for this template.
         "packages": ["openai"],
         "install_steps": ("venv", "pip_install_packages", "pip_verify_packages"),
     },
@@ -188,8 +189,10 @@ def _resolve_install_target(template_id: str, override: str | None = None) -> Pa
         raise ValueError(f"unknown runtime template: {template_id!r}")
     if override:
         candidate = Path(override).expanduser().resolve()
-    else:
+    elif "target_relative" in recipe:
         candidate = (Path.home() / recipe["target_relative"]).resolve()
+    else:
+        raise ValueError(f"no default install target for {template_id!r} — pass --target or --client")
     home_resolved = Path.home().resolve()
     try:
         candidate.relative_to(home_resolved)
@@ -438,18 +441,20 @@ def _install_runtime_payload(
     }
 
 
-def _sentinel_inference_sdk_venv_status() -> dict:
-    """Check whether the sentinel_inference_sdk venv exists and openai is importable."""
+def _sentinel_inference_sdk_venv_status(client: str) -> dict:
+    """Check whether the sentinel_inference_sdk venv for ``client`` exists and the package is importable."""
     recipe = _RUNTIME_INSTALL_RECIPES["sentinel_inference_sdk"]
-    target = Path.home() / recipe["target_relative"]
+    target = sentinel_sdk_venv_root(client)
     venv_python = target / ".venv" / "bin" / "python3"
+    install_hint = f"ax gateway runtime install sentinel_inference_sdk --client {client}"
     if not venv_python.exists():
         return {
             "ready": False,
             "template_id": "sentinel_inference_sdk",
+            "client": client,
             "resolved_path": None,
             "expected_path": str(target / ".venv"),
-            "summary": f"venv not found at {target / '.venv'}. Run `ax gateway runtime install sentinel_inference_sdk`.",
+            "summary": f"venv not found at {target / '.venv'}. Run `{install_hint}`.",
         }
     packages = list(recipe.get("packages") or [])
     for pkg in packages:
@@ -464,14 +469,21 @@ def _sentinel_inference_sdk_venv_status() -> dict:
                 return {
                     "ready": False,
                     "template_id": "sentinel_inference_sdk",
+                    "client": client,
                     "resolved_path": str(venv_python),
-                    "summary": f"{pkg} not importable from {venv_python}. Run `ax gateway runtime install sentinel_inference_sdk`.",
+                    "summary": f"{pkg} not importable from {venv_python}. Run `{install_hint}`.",
                 }
         except Exception as exc:  # noqa: BLE001
-            return {"ready": False, "template_id": "sentinel_inference_sdk", "summary": f"verify failed: {exc}"}
+            return {
+                "ready": False,
+                "template_id": "sentinel_inference_sdk",
+                "client": client,
+                "summary": f"verify failed: {exc}",
+            }
     return {
         "ready": True,
         "template_id": "sentinel_inference_sdk",
+        "client": client,
         "resolved_path": str(venv_python),
         "summary": f"openai importable from {venv_python}.",
         "python_path": str(venv_python),
@@ -514,7 +526,7 @@ _SENTINEL_INFERENCE_SDK_SUPPORTED_CLIENTS = {"openai_sdk"}
 def runtime_install(
     template_id: str = typer.Argument(..., help="Runtime template id (e.g. 'hermes', 'sentinel_inference_sdk')"),
     target: str = typer.Option(None, "--target", help="Override install target (must resolve under your home tree)"),
-    client: str = typer.Option(
+    client: str | None = typer.Option(
         None,
         "--client",
         help="Client library to install. Required for sentinel_inference_sdk. Supported: openai_sdk.",
@@ -562,6 +574,8 @@ def runtime_install(
                 f"Only {sorted(_SENTINEL_INFERENCE_SDK_SUPPORTED_CLIENTS)} is supported for sentinel_inference_sdk today."
             )
             raise typer.Exit(1)
+        if not target:
+            target = str(sentinel_sdk_venv_root(client))
     try:
         payload = _install_runtime_payload(template_id, target_override=target, operator_session=operator_session)
     except (ValueError, PermissionError) as exc:
@@ -596,6 +610,11 @@ def runtime_install(
 @runtime_app.command("status")
 def runtime_status(
     template_id: str = typer.Argument(..., help="Runtime template id (e.g. 'hermes', 'sentinel_inference_sdk')"),
+    client: str | None = typer.Option(
+        None,
+        "--client",
+        help="Client to check. Required for sentinel_inference_sdk (e.g. openai_sdk).",
+    ),
     as_json: bool = JSON_OPTION,
 ):
     """Report whether a runtime template is ready (preflight check).
@@ -603,14 +622,20 @@ def runtime_status(
     Useful as an automation gate: exits non-zero when not ready.
 
         ax gateway runtime status hermes
-        ax gateway runtime status sentinel_inference_sdk
+        ax gateway runtime status sentinel_inference_sdk --client openai_sdk
     """
     tid = template_id.strip().lower()
     if tid not in _RUNTIME_INSTALL_RECIPES:
         err_console.print(f"[red]unknown runtime template:[/red] {template_id!r}")
         raise typer.Exit(1)
     if tid == "sentinel_inference_sdk":
-        status = _sentinel_inference_sdk_venv_status()
+        if not client:
+            err_console.print(
+                "[red]--client is required for sentinel_inference_sdk.[/red] "
+                "Example: ax gateway runtime status sentinel_inference_sdk --client openai_sdk"
+            )
+            raise typer.Exit(1)
+        status = _sentinel_inference_sdk_venv_status(client)
     else:
         from ..gateway import hermes_setup_status
 
@@ -630,6 +655,168 @@ def runtime_status(
         err_console.print(f"  summary = {status['summary']}")
     if not status.get("ready"):
         raise typer.Exit(1)
+
+
+# ── runtime auth ─────────────────────────────────────────────────────────────
+# Store runtime provider credentials, mirroring `ax gateway connectors auth`.
+# ~/.ax/codex-token is the shared plain-text file both the openai_sdk and
+# hermes_sdk runtimes read (priority #4 in their _resolve_codex_token); an aX
+# Platform PAT (axp_*) is explicitly NOT a valid Codex token there.
+CODEX_SHARED_TOKEN_PATH = Path.home() / ".ax" / "codex-token"
+
+_RUNTIME_AUTH_PROVIDERS: dict[str, dict] = {
+    "openai-codex": {
+        "path": CODEX_SHARED_TOKEN_PATH,
+        "key": "CODEX_TOKEN",
+        "reject_prefix": "axp_",
+        "reject_hint": (
+            "That looks like an aX Platform PAT, not a Codex token. Copy the "
+            "access_token from ~/.hermes/auth.json, or run `hermes login`."
+        ),
+    },
+}
+
+
+def _resolve_runtime_auth_provider(provider: str) -> dict:
+    spec = _RUNTIME_AUTH_PROVIDERS.get(provider.strip().lower())
+    if spec is None:
+        known = ", ".join(sorted(_RUNTIME_AUTH_PROVIDERS)) or "(none)"
+        err_console.print(f"[red]Unknown runtime provider:[/red] {provider!r}. Known: {known}")
+        raise typer.Exit(1)
+    return spec
+
+
+def _parse_runtime_auth_kvs(kvs: list[str]) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for kv in kvs:
+        if "=" not in kv:
+            err_console.print(f"[red]Invalid format:[/red] {kv!r} — expected KEY=VALUE")
+            raise typer.Exit(1)
+        k, _, v = kv.partition("=")
+        k = k.strip()
+        if not k:
+            err_console.print(f"[red]Empty key in:[/red] {kv!r}")
+            raise typer.Exit(1)
+        parsed[k] = v
+    return parsed
+
+
+def _runtime_auth_status_payload(provider: str, spec: dict) -> dict:
+    path = spec["path"]
+    payload: dict = {
+        "provider": provider,
+        "key": spec["key"],
+        "path": str(path),
+        "exists": path.is_file(),
+    }
+    if payload["exists"]:
+        try:
+            raw = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            raw = ""
+        payload["size_bytes"] = len(raw)
+        reject_prefix = spec.get("reject_prefix")
+        if reject_prefix and raw.startswith(reject_prefix):
+            payload["looks_invalid"] = spec.get("reject_hint", "Stored value looks invalid.")
+    return payload
+
+
+@runtime_auth_app.command("write")
+def runtime_auth_write(
+    provider: str = typer.Argument(..., help="Runtime provider (today: openai-codex)"),
+    kvs: list[str] = typer.Argument(..., help="KEY=VALUE pair (e.g. CODEX_TOKEN=sk-...)"),
+    as_json: bool = JSON_OPTION,
+):
+    """Store credentials for a runtime provider on disk.
+
+    Mirrors ``ax gateway connectors auth write``. Today supports ``openai-codex``,
+    which writes the token to ~/.ax/codex-token — the shared path the openai_sdk
+    and hermes_sdk runtimes read.
+
+        ax gateway runtime auth write openai-codex CODEX_TOKEN=<token>
+
+    Security note: KEY=VALUE args appear in shell history. For sensitive values,
+    prefix the command with a space (most shells skip history) or set:
+      export HISTCONTROL=ignorespace
+    """
+    spec = _resolve_runtime_auth_provider(provider)
+    parsed = _parse_runtime_auth_kvs(kvs)
+    expected_key = spec["key"]
+    if expected_key not in parsed:
+        got = ", ".join(sorted(parsed)) or "(none)"
+        err_console.print(f"[red]{provider} expects {expected_key}=<value>.[/red] Got: {got}")
+        raise typer.Exit(1)
+    value = parsed[expected_key].strip()
+    if not value:
+        err_console.print(f"[red]Empty value for {expected_key}.[/red]")
+        raise typer.Exit(1)
+    reject_prefix = spec.get("reject_prefix")
+    if reject_prefix and value.startswith(reject_prefix):
+        err_console.print(f"[red]Refusing to store this value for {provider}.[/red] {spec.get('reject_hint', '')}")
+        raise typer.Exit(1)
+    path = spec["path"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Lock the file to owner-only BEFORE writing the secret, so the credential
+    # never exists world-readable, even briefly. touch(mode) only applies to a
+    # newly created file, so chmod tightens a pre-existing (possibly looser)
+    # file too. NTFS uses ACLs, not POSIX mode bits, so this is off-Windows only.
+    if sys.platform != "win32":
+        path.touch(mode=0o600)
+        path.chmod(0o600)
+    path.write_text(value + "\n", encoding="utf-8")
+    payload = _runtime_auth_status_payload(provider, spec)
+    if as_json:
+        print_json(payload)
+        return
+    err_console.print(f"[green]Stored {expected_key} for {provider}[/green]")
+    err_console.print(f"  path = {path}")
+    err_console.print("  [dim]note: static token with no auto-refresh — re-run this command when it expires.[/dim]")
+
+
+@runtime_auth_app.command("status")
+def runtime_auth_status(
+    provider: str = typer.Argument(..., help="Runtime provider (today: openai-codex)"),
+    as_json: bool = JSON_OPTION,
+):
+    """Show stored-credential status for a runtime provider (presence only, never the value)."""
+    spec = _resolve_runtime_auth_provider(provider)
+    payload = _runtime_auth_status_payload(provider, spec)
+    if as_json:
+        print_json(payload)
+        return
+    if payload["exists"]:
+        err_console.print(f"[bold]{provider}[/bold] credential:")
+        err_console.print(f"  path = {payload['path']}")
+        err_console.print(f"  size = {payload['size_bytes']} bytes")
+        if payload.get("looks_invalid"):
+            err_console.print(f"  [yellow]warning:[/yellow] {payload['looks_invalid']}")
+    else:
+        err_console.print(f"[yellow]No credential stored for {provider}.[/yellow]")
+        err_console.print(f"  Run: ax gateway runtime auth write {provider} {spec['key']}=<value>")
+
+
+@runtime_auth_app.command("clear")
+def runtime_auth_clear(
+    provider: str = typer.Argument(..., help="Runtime provider (today: openai-codex)"),
+    as_json: bool = JSON_OPTION,
+):
+    """Remove stored credentials for a runtime provider."""
+    spec = _resolve_runtime_auth_provider(provider)
+    path = spec["path"]
+    removed = path.is_file()
+    if removed:
+        try:
+            path.unlink()
+        except OSError as exc:
+            err_console.print(f"[red]Could not remove {path}:[/red] {exc}")
+            raise typer.Exit(1)
+    if as_json:
+        print_json({"provider": provider, "path": str(path), "auth_removed": removed})
+        return
+    if removed:
+        err_console.print(f"[green]Credential removed for {provider}[/green]")
+    else:
+        err_console.print(f"[yellow]No credential stored for {provider}[/yellow]")
 
 
 @app.command("runtime-types")

@@ -19,6 +19,7 @@ approvals_app = typer.Typer(name="approvals", help="Review and decide Gateway ap
 runtime_app = typer.Typer(
     name="runtime", help="Install and inspect runtime templates (Hermes, etc.)", no_args_is_help=True
 )
+runtime_auth_app = typer.Typer(name="auth", help="Manage runtime provider credentials", no_args_is_help=True)
 local_app = typer.Typer(name="local", help="Connect local pass-through agents to Gateway", no_args_is_help=True)
 connectors_app = typer.Typer(name="connectors", help="Manage outbound tool connectors", no_args_is_help=True)
 connectors_auth_app = typer.Typer(name="auth", help="Manage connector credentials", no_args_is_help=True)
@@ -31,6 +32,7 @@ app.add_typer(agents_app, name="agents")
 app.add_typer(spaces_app, name="spaces")
 app.add_typer(approvals_app, name="approvals")
 app.add_typer(runtime_app, name="runtime")
+runtime_app.add_typer(runtime_auth_app, name="auth")
 app.add_typer(local_app, name="local")
 app.add_typer(connectors_app, name="connectors")
 app.add_typer(audit_app, name="audit")

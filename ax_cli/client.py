@@ -599,26 +599,6 @@ class AxClient:
         r.raise_for_status()
         return self._parse_json(r)
 
-    def archive_space(self, space_id: str) -> dict:
-        """PATCH /api/v1/spaces/{id} — soft-delete (archive) a space.
-
-        Spaces have no hard-delete route (DELETE returns 405); archive is the
-        reversible soft-delete the platform exposes.
-        """
-        r = self._http.patch(f"/api/v1/spaces/{space_id}", json={"is_archived": True})
-        r.raise_for_status()
-        if not r.content:
-            return {"space_id": space_id, "is_archived": True}
-        return self._parse_json(r)
-
-    def leave_space(self, space_id: str) -> dict:
-        """DELETE /api/v1/spaces/{id}/members/me — remove the caller from the space."""
-        r = self._http.delete(f"/api/v1/spaces/{space_id}/members/me")
-        r.raise_for_status()
-        if not r.content:
-            return {"space_id": space_id, "left": True}
-        return self._parse_json(r)
-
     # --- Messages ---
 
     def send_heartbeat(
@@ -1391,13 +1371,24 @@ class AxClient:
 
     # --- SSE ---
 
-    # --- Management API (user_admin JWT) ---
+    # --- Management API (user_access JWT) ---
 
     def _admin_headers(self, scope: str) -> dict:
-        """Get headers with a user_admin JWT for management operations."""
+        """Get headers with a user JWT for management operations.
+
+        INTERIM: exchanges for ``user_access``. The original AUTH-SPEC-001
+        design used a privileged ``user_admin`` class gated by fine-grained
+        scopes (``agents.create``, ``credentials.issue.agent``,
+        ``credentials.revoke``), but the platform dropped ``user_admin`` while
+        reworking its permissions model — the management/credentials endpoints
+        now authorize on a plain user JWT and do not enforce the scope strings.
+        The ``scope`` argument is retained (passed through to the exchange) to
+        document intent and to ease a future re-introduction of scoped admin
+        tokens. AUTH-SPEC update is a scoped follow-on.
+        """
         if not self._exchanger:
             return self._base_headers
-        jwt = self._exchanger.get_token("user_admin", scope=scope)
+        jwt = self._exchanger.get_token("user_access", scope=scope)
         return {**self._base_headers, "Authorization": f"Bearer {jwt}"}
 
     def register_gateway(self, name: str, *, url: str | None = None, version: str | None = None) -> dict:
@@ -1418,7 +1409,7 @@ class AxClient:
         return self._parse_json(r)
 
     def mgmt_create_agent(self, name: str, **kwargs) -> dict:
-        """Create an agent — requires user_admin + agents.create."""
+        """Create an agent via the management API (user JWT)."""
         body: dict = {"name": name}
         for k in ("description", "system_prompt", "model", "space_id", "agent_type", "gateway_id"):
             if k in kwargs and kwargs[k] is not None:
@@ -1431,7 +1422,7 @@ class AxClient:
         )
 
     def mgmt_list_agents(self) -> list[dict]:
-        """List manageable agents — requires user_admin + agents.create."""
+        """List manageable agents via the management API (user JWT)."""
         return self._management_json_with_fallback(
             "get",
             ["/api/v1/agents/manage/list", "/agents/manage/list"],
@@ -1439,7 +1430,7 @@ class AxClient:
         )
 
     def mgmt_update_agent(self, agent_id: str, **fields) -> dict:
-        """PATCH /agents/manage/{id} — requires user_admin + agents.create."""
+        """PATCH /agents/manage/{id} — management API (user JWT)."""
         r = self._http.patch(f"/agents/manage/{agent_id}", json=fields, headers=self._admin_headers("agents.create"))
         r.raise_for_status()
         return self._parse_json(r)
@@ -1452,7 +1443,7 @@ class AxClient:
         expires_in_days: int = 90,
         audience: str = "cli",
     ) -> dict:
-        """POST /credentials/agent-pat — requires user_admin + credentials.issue.agent."""
+        """POST /credentials/agent-pat — management API (user JWT)."""
         body = {"agent_id": agent_id, "expires_in_days": expires_in_days, "audience": audience}
         if name:
             body["name"] = name
@@ -1469,7 +1460,7 @@ class AxClient:
         expires_in_hours: int = 1,
         audience: str = "cli",
     ) -> dict:
-        """POST /credentials/enrollment — requires user_admin + credentials.issue.agent."""
+        """POST /credentials/enrollment — management API (user JWT)."""
         body = {"expires_in_hours": expires_in_hours, "audience": audience}
         if name:
             body["name"] = name
@@ -1480,13 +1471,13 @@ class AxClient:
         return self._parse_json(r)
 
     def mgmt_revoke_credential(self, credential_id: str) -> dict:
-        """DELETE /credentials/{id} — requires user_admin + credentials.revoke."""
+        """DELETE /credentials/{id} — management API (user JWT)."""
         r = self._http.delete(f"/credentials/{credential_id}", headers=self._admin_headers("credentials.revoke"))
         r.raise_for_status()
         return self._parse_json(r)
 
     def mgmt_list_credentials(self) -> list[dict]:
-        """GET /credentials — requires user_admin + credentials.issue.agent."""
+        """GET /credentials — management API (user JWT)."""
         r = self._http.get("/credentials", headers=self._admin_headers("agents.create credentials.issue.agent"))
         r.raise_for_status()
         return self._parse_json(r)

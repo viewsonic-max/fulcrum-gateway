@@ -13,7 +13,7 @@ import typer
 from ..config import get_client, resolve_agent_name, resolve_gateway_config, resolve_space_id
 from ..context_keys import build_upload_context_key
 from ..mentions import merge_explicit_mentions_metadata
-from ..output import JSON_OPTION, console, handle_error, print_json, print_kv, print_table
+from ..output import JSON_OPTION, console, handle_error, print_json, print_kv, print_table, unwrap_envelope
 from .gateway_local import _approval_required_guidance, _local_route_failure_guidance
 from .gateway_session import _local_process_fingerprint
 from .watch import _iter_sse
@@ -934,8 +934,8 @@ def send(
             parent_id=parent,
             attachments=attachments_payload or None,
         )
-        msg = data.get("message", data)
-        msg_id = msg.get("id") or msg.get("message_id") or data.get("id")
+        msg = unwrap_envelope(data, "message")
+        msg_id = msg.get("id") or msg.get("message_id") or (data.get("id") if isinstance(data, dict) else None)
         if as_json:
             augment_send_receipt_with_pending(data, pending)
             print_json(data)
@@ -1081,8 +1081,8 @@ def send(
     except httpx.HTTPStatusError as e:
         handle_error(e)
 
-    msg = data.get("message", data)
-    msg_id = msg.get("id") or msg.get("message_id") or data.get("id")
+    msg = unwrap_envelope(data, "message")
+    msg_id = msg.get("id") or msg.get("message_id") or (data.get("id") if isinstance(data, dict) else None)
     if processing_watcher and msg_id:
         processing_watcher.set_message_id(str(msg_id))
 
@@ -1257,10 +1257,11 @@ def get(
             data = client.get_message(_resolve_message_id(client, message_id))
         except httpx.HTTPStatusError as e:
             handle_error(e)
+    msg = unwrap_envelope(data, "message")
     if as_json:
-        print_json(data)
+        print_json(msg)
     else:
-        print_kv(data)
+        print_kv(msg) if isinstance(msg, dict) else print_kv(data)
 
 
 @app.command("edit")

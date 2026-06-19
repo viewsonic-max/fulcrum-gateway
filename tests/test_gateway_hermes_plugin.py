@@ -314,10 +314,11 @@ def test_hermes_setup_status_does_not_gate_plugin_runtime(tmp_path, monkeypatch)
     status = gateway_core.hermes_setup_status(entry)
     assert status["ready"] is True, status
 
-    # Sanity: sentinel_inference_sdk also requires the checkout.
+    # sentinel_inference_sdk no longer requires a hermes-agent checkout —
+    # it uses a gateway-owned venv under ~/.ax/runtimes/sentinel_inference_sdk.
     sentinel_entry = dict(entry, runtime_type="sentinel_inference_sdk")
     sentinel_status = gateway_core.hermes_setup_status(sentinel_entry)
-    assert sentinel_status["ready"] is False
+    assert sentinel_status["ready"] is True
 
 
 def test_build_cmd_uses_hermes_gateway_run(tmp_path, monkeypatch):

@@ -605,6 +605,71 @@ class TestChannelSseDoctorCheck:
         assert check_names.get("claude_code_session", {}).get("status") == "passed"
 
 
+class TestRuntimeLaunchDoctorCheck:
+    """runtime_launch must not fail Gateway-supervised runtimes that carry no exec_command (issue #359)."""
+
+    def _make_supervised_entry(self, tmp_path, *, runtime_type, template_id):
+        token_file = tmp_path / "token"
+        token_file.write_text("axp_a_agent.secret")
+        return {
+            "name": "supervised-agent",
+            "agent_id": "agent-sup",
+            "space_id": "space-1",
+            "base_url": "https://paxai.app",
+            "runtime_type": runtime_type,
+            "template_id": template_id,
+            "desired_state": "running",
+            "effective_state": "running",
+            "last_seen_at": gateway_core._now_iso(),
+            "token_file": str(token_file),
+            "transport": "gateway",
+            "credential_source": "gateway",
+            "connected": True,
+            # No exec_command on purpose: Gateway supervises the launch implicitly.
+        }
+
+    def _seed(self, tmp_path, entry):
+        gateway_core.save_gateway_session(
+            {"token": "axp_u_test.token", "base_url": "https://paxai.app", "space_id": "space-1", "username": "u"}
+        )
+        registry = gateway_core.load_gateway_registry()
+        registry["agents"] = [entry]
+        gateway_core.save_gateway_registry(registry)
+
+    def test_hermes_plugin_runtime_launch_passes_without_exec_command(self, tmp_path):
+        entry = self._make_supervised_entry(tmp_path, runtime_type="hermes_plugin", template_id="hermes")
+        self._seed(tmp_path, entry)
+
+        result = _gw_diagnostics._run_gateway_doctor("supervised-agent")
+        check_names = {c["name"]: c for c in result["checks"]}
+        assert check_names.get("runtime_launch", {}).get("status") == "passed"
+        assert "hermes gateway run" in check_names["runtime_launch"]["detail"]
+        # The bug surfaced as a doctor-level failure summarizing the missing launch command.
+        assert "does not have a launch command" not in (result.get("summary") or "")
+
+    def test_sentinel_inference_sdk_runtime_launch_passes_without_exec_command(self, tmp_path):
+        entry = self._make_supervised_entry(
+            tmp_path, runtime_type="sentinel_inference_sdk", template_id="sentinel_cli"
+        )
+        self._seed(tmp_path, entry)
+
+        result = _gw_diagnostics._run_gateway_doctor("supervised-agent")
+        check_names = {c["name"]: c for c in result["checks"]}
+        assert check_names.get("runtime_launch", {}).get("status") == "passed"
+
+    def test_non_supervised_runtime_without_exec_command_still_fails(self, tmp_path):
+        # Guard against over-broadening: a runtime outside the supervised-subprocess
+        # set (sentinel_cli is per-prompt, not a long-running supervised child)
+        # missing its exec_command must still be reported as a failure — its
+        # behavior is unchanged by this fix.
+        entry = self._make_supervised_entry(tmp_path, runtime_type="sentinel_cli", template_id="sentinel_cli")
+        self._seed(tmp_path, entry)
+
+        result = _gw_diagnostics._run_gateway_doctor("supervised-agent")
+        check_names = {c["name"]: c for c in result["checks"]}
+        assert check_names.get("runtime_launch", {}).get("status") == "failed"
+
+
 class TestStatusTextRendering:
     def test_status_with_agents_and_alerts(self, monkeypatch):
         payload = {

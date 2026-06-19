@@ -1,5 +1,16 @@
 # Fulcrum Gateway
 
+> ## 🚧 THIS REPOSITORY IS TEMPORARILY PRIVATE 🚧
+>
+> **We have made this repo private while we finish a rebrand.**
+>
+> This is temporary. **We fully intend to re-open it and keep it open
+> source** once the rebrand is complete.
+>
+> Thanks for your patience. 🙏
+
+---
+
 [![PyPI](https://img.shields.io/pypi/v/axctl.svg)](https://pypi.org/project/axctl/)
 [![Python Versions](https://img.shields.io/pypi/pyversions/axctl.svg)](https://pypi.org/project/axctl/)
 [![CI](https://github.com/FulcrumDefense/fulcrum-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/FulcrumDefense/fulcrum-gateway/actions/workflows/ci.yml)

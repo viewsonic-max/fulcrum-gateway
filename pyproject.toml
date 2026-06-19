@@ -25,10 +25,10 @@ classifiers = [
 ]
 dependencies = [
     "typer>=0.25.1,<0.26",
-    "httpx>=0.25",
+    "httpx>=0.28.1",
     "rich>=13.0",
     "pyyaml>=6.0.3",
-    "tomli-w>=1.0",
+    "tomli-w>=1.2.0",
 ]
 
 [project.urls]
@@ -46,7 +46,7 @@ dev = [
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
-    "ruff>=0.15.12",
+    "ruff==0.15.15",
     "twine>=6.2.0",
 ]
 mistral = [
@@ -61,7 +61,7 @@ mcp-postgres = [
     # Postgres backend for report_gen. Default backend is SQLite (zero deps);
     # only install this extra if you set AX_REPORT_GEN_DB_KIND=postgres.
     "sqlglot>=22.0",
-    "psycopg[binary]>=3.2",
+    "psycopg[binary]>=3.3.4",
 ]
 
 [tool.pytest.ini_options]
@@ -70,6 +70,7 @@ pythonpath = ["."]
 addopts = ["-p", "no:pytest_postgresql"]
 
 [tool.ruff]
+required-version = "==0.15.15"
 target-version = "py311"
 line-length = 120
 extend-exclude = ["ax_cli/runtimes/hermes"]  # Vendored runtime — see ax_cli/runtimes/hermes/README.md

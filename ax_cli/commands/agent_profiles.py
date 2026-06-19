@@ -7,13 +7,13 @@ from typing import Optional
 import typer
 
 from ..agent_settings_profiles import (
+    RegistryLookupError,
     agent_info_from_registry,
     apply,
     current_profile_list,
     diff,
     list_all,
     list_available,
-    workdir_for_agent,
 )
 from ..output import JSON_OPTION, console, err_console, print_json, print_table
 
@@ -24,14 +24,31 @@ profiles_app = typer.Typer(
 )
 
 
+def _registry_info_or_exit(agent_name: str) -> dict[str, str | None]:
+    """Look up *agent_name* in the Gateway registry, exiting with the failure
+    that actually happened: registry missing/unreadable (message from
+    `RegistryLookupError`) vs. agent absent from a healthy registry (#298).
+    """
+    try:
+        info = agent_info_from_registry(agent_name)
+    except RegistryLookupError as exc:
+        err_console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1)
+    if info is None:
+        err_console.print(f"[red]Error:[/red] Agent '{agent_name}' not found in the local Gateway registry.")
+        raise typer.Exit(1)
+    return info
+
+
 def _resolve_workdir(agent_name: str, workdir_override: str | None) -> str:
     if workdir_override:
         return workdir_override
-    workdir = workdir_for_agent(agent_name)
+    info = _registry_info_or_exit(agent_name)
+    workdir = info["workdir"]
     if not workdir:
         err_console.print(
-            f"[red]Error:[/red] Could not find workdir for agent '{agent_name}' in the local Gateway registry.\n"
-            "  Is the Gateway running? Try passing --workdir explicitly."
+            f"[red]Error:[/red] Agent '{agent_name}' has no workdir in the Gateway registry.\n"
+            "  Try passing --workdir explicitly."
         )
         raise typer.Exit(1)
     return workdir
@@ -44,20 +61,18 @@ def _resolve_client(agent_name: str) -> str:
     determined by its `runtime_type`), not a parameter callers can choose —
     so unlike `--workdir`, there is no override flag for it.
     """
-    info = agent_info_from_registry(agent_name)
-    client = info.get("client") if info else None
+    info = _registry_info_or_exit(agent_name)
+    client = info["client"]
     if client:
         return client
 
-    runtime_type = info.get("runtime_type") if info else None
+    runtime_type = info["runtime_type"]
     if runtime_type:
         err_console.print(
             f"[red]Error:[/red] Agent '{agent_name}' runtime '{runtime_type}' does not support profiles yet."
         )
     else:
-        err_console.print(
-            f"[red]Error:[/red] Could not determine the client for agent '{agent_name}'.\n  Is the Gateway running?"
-        )
+        err_console.print(f"[red]Error:[/red] Agent '{agent_name}' has no runtime_type in the Gateway registry.")
     raise typer.Exit(1)
 
 
@@ -179,13 +194,7 @@ def profiles_show(
 
     Resolves the agent's workdir and client from the local Gateway registry.
     """
-    info = agent_info_from_registry(agent_name)
-    if not info:
-        err_console.print(
-            f"[red]Error:[/red] Agent '{agent_name}' not found in the local Gateway registry.\n"
-            "  Is the Gateway running?"
-        )
-        raise typer.Exit(1)
+    info = _registry_info_or_exit(agent_name)
 
     workdir = info["workdir"]
     runtime_type = info["runtime_type"]

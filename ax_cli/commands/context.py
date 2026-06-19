@@ -12,7 +12,7 @@ import typer
 
 from ..config import get_client, resolve_gateway_config, resolve_space_id
 from ..context_keys import build_upload_context_key
-from ..output import JSON_OPTION, handle_error, mention_prefix, print_json, print_kv, print_table
+from ..output import JSON_OPTION, handle_error, mention_prefix, print_json, print_kv, print_table, unwrap_envelope
 
 app = typer.Typer(name="context", help="Context & file operations", no_args_is_help=True)
 
@@ -541,10 +541,11 @@ def get_ctx(
         data = client.get_context(key, space_id=sid)
     except httpx.HTTPStatusError as exc:
         handle_error(exc)
+    ctx = unwrap_envelope(data, "context")
     if as_json:
-        print_json(data)
+        print_json(ctx)
     else:
-        print_kv(data)
+        print_kv(ctx) if isinstance(ctx, dict) else print_kv(data)
 
 
 @app.command("list")

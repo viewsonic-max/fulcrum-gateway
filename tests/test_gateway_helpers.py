@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -2210,6 +2211,20 @@ class TestFormatDaemonLogLine:
         assert len(line) > 0
 
 
+def _activity_writer(gw_dir: str, count: int) -> None:
+    """Worker run in a separate process: write `count` activity records.
+
+    It sets AX_GATEWAY_DIR and imports inside the function on purpose. Under the
+    'spawn' start method the child is a fresh interpreter that does not inherit
+    the parent's env, imports, or monkeypatches.
+    """
+    os.environ["AX_GATEWAY_DIR"] = gw_dir
+    from ax_cli.gateway import record_gateway_activity
+
+    for _ in range(count):
+        record_gateway_activity("cross_proc_test")
+
+
 class TestRecordAndLoadGatewayActivity:
     """record_gateway_activity / load_recent_gateway_activity round-trip."""
 
@@ -2241,6 +2256,107 @@ class TestRecordAndLoadGatewayActivity:
         record_gateway_activity("reply_sent")
         items = load_recent_gateway_activity(limit=10)
         assert items[0].get("phase") == "reply"
+
+    def test_chain_seq_and_prev_hash_are_set(self, monkeypatch, tmp_path):
+        from ax_cli.gateway import record_gateway_activity
+
+        monkeypatch.setenv("AX_GATEWAY_DIR", str(tmp_path / "gw"))
+        r1 = record_gateway_activity("ev1")
+        r2 = record_gateway_activity("ev2")
+        assert r1["seq"] == 1
+        assert r1["prev_hash"] is None
+        assert r2["seq"] == 2
+        assert r2["prev_hash"] is not None
+
+    def test_concurrent_writes_produce_unique_seqs(self, monkeypatch, tmp_path):
+        """Concurrent in-process writers must not produce duplicate seq numbers.
+
+        This exercises the _exclusive_activity_lock cross-process guard at the
+        threading level (same guarantee, lower test complexity than spawning
+        subprocesses). A duplicate seq is the exact symptom the lock prevents.
+        """
+        import threading as _threading
+
+        from ax_cli.gateway import record_gateway_activity
+
+        monkeypatch.setenv("AX_GATEWAY_DIR", str(tmp_path / "gw"))
+
+        results = []
+        errors = []
+
+        def _write():
+            try:
+                r = record_gateway_activity("concurrent_test")
+                results.append(r["seq"])
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [_threading.Thread(target=_write) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, errors
+        assert len(results) == 10
+        assert len(set(results)) == 10, f"Duplicate seqs found: {sorted(results)}"
+
+    def test_lock_file_created_alongside_activity_log(self, monkeypatch, tmp_path):
+        """A companion .lock file is created next to activity.jsonl on POSIX."""
+        from ax_cli.gateway import record_gateway_activity
+        from ax_cli.gateway_storage import activity_log_path
+
+        if sys.platform == "win32":
+            pytest.skip("fcntl not available on Windows")
+
+        monkeypatch.setenv("AX_GATEWAY_DIR", str(tmp_path / "gw"))
+        record_gateway_activity("lock_test")
+        lock_path = activity_log_path().with_suffix(".lock")
+        assert lock_path.exists()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="flock cross-process guarantee is POSIX-only")
+    def test_concurrent_cross_process_writes_keep_chain_intact(self, monkeypatch, tmp_path):
+        """Real regression test for #288: separate processes must not fork the chain.
+
+        A threading-only test passes even with the old process-local threading.Lock,
+        so it cannot prove the cross-process fix. This spawns N processes writing to
+        the same log, then runs the actual chain verifier and asserts no breaks.
+        """
+        import json
+        import multiprocessing
+
+        from ax_cli.audit import verify_chain
+        from ax_cli.gateway_storage import activity_log_path
+
+        gw_dir = str(tmp_path / "gw")
+        writers, per_writer = 4, 25
+        total = writers * per_writer
+
+        ctx = multiprocessing.get_context("spawn")
+        procs = [
+            ctx.Process(target=_activity_writer, args=(gw_dir, per_writer))
+            for _ in range(writers)
+        ]
+        for p in procs:
+            p.start()
+        for p in procs:
+            p.join(30)
+            assert p.exitcode == 0, f"writer process exited with {p.exitcode}"
+
+        monkeypatch.setenv("AX_GATEWAY_DIR", gw_dir)
+        path = activity_log_path()
+        records = [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        seqs = sorted(r["seq"] for r in records)
+
+        assert len(records) == total, f"expected {total} records, got {len(records)}"
+        assert seqs == list(range(1, total + 1)), f"forked/duplicated seqs: {seqs}"
+
+        report = verify_chain(path)
+        assert report.ok, f"chain breaks under cross-process writes: {[b.kind for b in report.breaks]}"
 
 
 # ---------------------------------------------------------------------------
@@ -2392,13 +2508,24 @@ class TestHermesSetupStatus:
             "ax_cli.gateway_assets._hermes_repo_candidates",
             lambda entry=None: [fake_path],
         )
+        # sentinel_inference_sdk no longer requires a hermes-agent checkout —
+        # it uses a gateway-owned venv under ~/.ax/runtimes/sentinel_inference_sdk.
+        # hermes_setup_status short-circuits to ready for this runtime.
         entry = {
             "template_id": "hermes",
             "runtime_type": "sentinel_inference_sdk",
         }
         result = hermes_setup_status(entry)
-        assert result["ready"] is False
-        assert "not found" in result["summary"].lower()
+        assert result["ready"] is True
+
+        # The hermes-not-found gate still applies for bare hermes template entries.
+        entry_hermes = {
+            "template_id": "hermes",
+            "runtime_type": "hermes",
+        }
+        result_hermes = hermes_setup_status(entry_hermes)
+        assert result_hermes["ready"] is False
+        assert "not found" in result_hermes["summary"].lower()
 
 
 # ---------------------------------------------------------------------------
