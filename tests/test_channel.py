@@ -2187,6 +2187,23 @@ def test_gateway_agent_channel_defaults_returns_entry_fields(monkeypatch):
     assert result["AX_TOKEN_FILE"] == "/tmp/token"
 
 
+def test_gateway_agent_channel_defaults_resolves_relative_token_file(monkeypatch, tmp_path):
+    """#377 regression: a relative registry token_file must be resolved against
+    gateway_dir() before it lands in AX_TOKEN_FILE. The bridge runs with
+    cwd = the agent workdir, so a relative path would resolve there (where it
+    doesn't exist) and auth would silently fall back to the user PAT."""
+    from ax_cli import gateway_storage
+
+    monkeypatch.setattr(gateway_storage, "gateway_dir", lambda: tmp_path / "gw")
+    monkeypatch.setattr(
+        gateway_core,
+        "load_gateway_registry",
+        lambda: {"agents": [{"name": "orion", "token_file": "agents/orion/token"}]},
+    )
+    result = channel_mod._gateway_agent_channel_defaults("orion")
+    assert result["AX_TOKEN_FILE"] == str(tmp_path / "gw" / "agents" / "orion" / "token")
+
+
 # ---- _write_gateway_cli_config ----
 
 
