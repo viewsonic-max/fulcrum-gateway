@@ -172,7 +172,9 @@ Profile management commands live under `ax agents profiles`, separate from
 `ax channel`, because they are client-agnostic within the namespace — they apply to any
 gateway-managed agent whose client is a profiles client, not only channel agents. The
 shipped tree is `list`, `show`, `diff`, `apply`. Agent name resolves workdir + client
-from the registry; `--client`/`--workdir` override.
+from the registry; client is always registry-derived. `apply` and `diff` accept
+`--workdir` to override the registry workdir lookup; `show` takes no overrides. (`list`'s
+`--client` is a directory filter, not an agent override — see below.)
 
 ### `ax agents profiles list`
 
@@ -187,7 +189,7 @@ profile name.
 ### `ax agents profiles show`
 
 ```bash
-ax agents profiles show <agent-name> [--client <name>] [--workdir <path>]
+ax agents profiles show <agent-name>
 ```
 
 Shows the profiles currently recorded for the agent (the `_axProfiles` list written
@@ -196,7 +198,7 @@ by `apply`) and the resulting settings.
 ### `ax agents profiles diff`
 
 ```bash
-ax agents profiles diff <agent-name> --profile <name>... [--reset] [--client <name>] [--workdir <path>]
+ax agents profiles diff <agent-name> --profile <name>... [--reset] [--workdir <path>]
 ```
 
 Previews what applying the given `--profile`(s) would change in the agent's
@@ -210,7 +212,6 @@ remove keys). At least one `--profile` is required.
 ax agents profiles apply <agent-name> \
     --profile <name>... \
     [--reset] \
-    [--client <name>] \
     [--workdir <path>]
 ```
 
@@ -258,15 +259,16 @@ effective permissions match its declared role. **`--reset` is also the only way 
 The agent's `model` is a **registry operational-config field**, not something profiles
 author. The authoritative source is the gateway registry (`model`, set via `--model` or a
 manifest — see [GATEWAY-MANAGED-AGENT-CONFIG-001](../GATEWAY-MANAGED-AGENT-CONFIG-001/spec.md)).
-*How* that registry value reaches each runtime is out of scope for this spec — see
-GATEWAY-MANAGED-AGENT-CONFIG-001 for the field and #361/#369 for the per-runtime
-application path.
+That registry value reaches the runtime through a single writer: for `claude_code_channel`
+the daemon projects the registered `model` into `settings.local.json` on start (#361/#369).
+See GATEWAY-MANAGED-AGENT-CONFIG-001 for the registry field itself.
 
 The one rule the profiles layer must respect: **a profile fragment must not author
 `model`.** If it did, the profile and the registry would be two competing writers,
 leaving `settings.local.json` internally inconsistent (a profile-authored model with the
-registry's value, or vice versa). This is convention today; single-writer enforcement
-(profiles refuse/strip `model`) is tracked in **#378**.
+registry's value, or vice versa). This is enforced, not just convention: a profile
+fragment that authors top-level `model` for `claude_cli` is rejected at fragment-load
+time, so `resolve`, `apply`, and `diff` all fail with the same actionable error (#378).
 
 ## Open questions
 

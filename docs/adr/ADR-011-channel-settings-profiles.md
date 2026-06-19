@@ -115,9 +115,6 @@ hand-configured workspaces.
 - **Positive:** New roles require only a new JSON file; no code changes.
 - **Positive:** New clients add a subdirectory and a format handler in the module —
   no changes to existing profiles or command files.
-- **Positive:** Template definitions encode the right profiles for each agent
-  archetype, so setup produces a correctly-permissioned workspace without
-  operator knowledge of profile names.
 - **Positive:** `ax agents profiles apply` and `diff` give operators clean workflows
   for updating and inspecting permissions independently of other layers.
 - **Negative:** Flat profiles allow duplicate entries across files. This is

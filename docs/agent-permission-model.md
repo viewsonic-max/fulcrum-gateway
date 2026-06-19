@@ -77,7 +77,7 @@ No permission bypass flag is injected. The agent's capability authorization is d
 To grant tool access, apply a profile before running the agent:
 
 ```bash
-ax agents profiles apply <agent-name> --client claude_cli --profile base
+ax agents profiles apply <agent-name> --profile base
 ```
 
 The profiles system is defined in [ADR-011](adr/ADR-011-channel-settings-profiles.md). Today setup runs as individual steps — gateway registration, client-layer setup (`ax channel setup`), and profile application (`ax agents profiles apply`); a one-command orchestrator that bundles them is possible future work.
