@@ -2677,6 +2677,7 @@ def _build_gateway_ui_handler(*, activity_limit: int, refresh_ms: int):
                             model=str(body.get("model") or "").strip() or None,
                             timeout_seconds=body.get("timeout_seconds", body.get("timeout")),
                             start=bool(body.get("start", True)),
+                            source="ui:api",
                         )
                     except UpstreamRateLimitedError as exc:
                         retry_after = exc.retry_after_seconds or 30
