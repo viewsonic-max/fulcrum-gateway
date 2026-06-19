@@ -14,6 +14,7 @@ from ax_cli.client import (
     _check_honeypot,
     _mime_from_ext,
     _mime_from_filename,
+    _normalize_rate_limit_reset,
     _RateLimitState,
     _RetryOnAuthClient,
 )
@@ -2251,6 +2252,35 @@ def test_create_task_auth_contract_raises_when_no_id_in_response(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# x-ratelimit-reset normalization
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeRateLimitReset:
+    def test_epoch_seconds_pass_through(self):
+        epoch = 1_781_827_556.0
+        assert _normalize_rate_limit_reset(str(int(epoch)), now=1_700_000_000.0) == epoch
+
+    def test_delta_seconds_converted_to_epoch(self):
+        now = 1_700_000_000.0
+        assert _normalize_rate_limit_reset("60", now=now) == now + 60
+
+    def test_http_date_converted_to_epoch(self):
+        import email.utils
+
+        expected = email.utils.parsedate_to_datetime("Wed, 21 Oct 2015 07:28:00 GMT").timestamp()
+        assert _normalize_rate_limit_reset("Wed, 21 Oct 2015 07:28:00 GMT") == expected
+
+    def test_missing_or_blank_returns_zero(self):
+        assert _normalize_rate_limit_reset(None) == 0.0
+        assert _normalize_rate_limit_reset("") == 0.0
+        assert _normalize_rate_limit_reset("   ") == 0.0
+
+    def test_unparseable_returns_zero(self):
+        assert _normalize_rate_limit_reset("not-a-date") == 0.0
+
+
+# ---------------------------------------------------------------------------
 # _RateLimitState tests
 # ---------------------------------------------------------------------------
 
@@ -2468,6 +2498,15 @@ def _rl_response(remaining: int, reset_at: float, status: int = 200) -> httpx.Re
     )
 
 
+def _rl_response_delta(remaining: int, reset_delta: int, status: int = 200) -> httpx.Response:
+    request = httpx.Request("GET", "https://paxai.app/api/v1/agents")
+    return httpx.Response(
+        status,
+        headers={"x-ratelimit-remaining": str(remaining), "x-ratelimit-reset": str(reset_delta)},
+        request=request,
+    )
+
+
 class TestRetryOnAuthClientRateLimiting:
     """_RetryOnAuthClient proactive rate-limit sleep and preemption."""
 
@@ -2495,6 +2534,22 @@ class TestRetryOnAuthClientRateLimiting:
         client.get("/api/v1/agents")  # should sleep before this request
         assert len(sleeps) == 1
         assert sleeps[0] > 0
+
+    def test_waits_when_reset_header_is_delta_seconds(self, monkeypatch):
+        import time as _time
+
+        sleeps = []
+        now = [_time.time()]
+        monkeypatch.setattr(_time, "sleep", lambda s: sleeps.append(s))
+        monkeypatch.setattr(_time, "time", lambda: now[0])
+        inner = MagicMock()
+        inner.get.return_value = _rl_response_delta(remaining=0, reset_delta=30)
+        client = _RetryOnAuthClient(inner, get_fresh_jwt=None)
+        client.get("/api/v1/agents")  # records exhaustion with delta reset
+        client.get("/api/v1/agents")  # should sleep before this request
+        assert len(sleeps) == 1
+        assert sleeps[0] > 0
+        assert client._rl.reset_at == pytest.approx(now[0] + 30)
 
     def test_calls_callback_on_wait(self, monkeypatch):
         import time as _time
