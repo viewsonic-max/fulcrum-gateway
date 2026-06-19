@@ -246,6 +246,18 @@ def _scaffold_bridge_workdir(
     return f"{_bridge_python()} {target}"
 
 
+#: Registration sources that are operator-driven (a human ran a CLI/UI action),
+#: as opposed to system/auto registrations (switchboard auto-create, etc.).
+_OPERATOR_SOURCE_PREFIXES = ("cli:", "ui:")
+
+
+def _is_operator_source(source: str | None) -> bool | None:
+    """Whether a registration `source` is operator-driven. None when unset."""
+    if not source:
+        return None
+    return source.startswith(_OPERATOR_SOURCE_PREFIXES)
+
+
 def _register_managed_agent(
     *,
     name: str,
@@ -265,6 +277,7 @@ def _register_managed_agent(
     connector_ref: str | None = None,
     agent_client: str | None = None,
     start: bool = True,
+    source: str | None = None,
 ) -> dict:
     name = name.strip()
     if not name:
@@ -462,6 +475,12 @@ def _register_managed_agent(
         "managed_agent_added",
         entry=entry,
         space_id=selected_space,
+        # Registration provenance: which call path created/replaced this entry,
+        # and whether an operator drove it. Makes runtime-type corruption from
+        # an unexpected re-registration diagnosable straight from activity.jsonl
+        # (e.g. a switchboard auto-create racing an operator apply) — see #385.
+        source=source,
+        operator_action=_is_operator_source(source),
     )
     return annotate_runtime_health(entry, registry=registry)
 
@@ -1666,6 +1685,7 @@ def add_agent(
             connector_ref=connector_ref,
             agent_client=client,
             start=start,
+            source="cli:add",
         )
     except (ValueError, LookupError) as exc:
         err_console.print(f"[red]{exc}[/red]")
@@ -1933,7 +1953,7 @@ def apply_manifest(
             kwargs = build_register_kwargs(manifest)
             if resolved_prompt is not _UNSET:
                 kwargs["system_prompt"] = resolved_prompt
-            entry = _register_managed_agent(**kwargs)
+            entry = _register_managed_agent(**kwargs, source="cli:apply")
         else:
             kwargs = build_update_kwargs(manifest, unset_sentinel=_UNSET)
             kwargs["system_prompt"] = resolved_prompt

@@ -390,6 +390,7 @@ def _ensure_gateway_test_sender(target_entry: dict) -> dict:
         space_id=target_space,
         description="Gateway-managed passive sender for service-event sends.",
         start=True,
+        source="switchboard:autocreate",
     )
 
 

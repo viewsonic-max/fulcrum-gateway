@@ -207,6 +207,11 @@ def test_gateway_agents_add_mints_token_and_writes_registry(monkeypatch, tmp_pat
     recent = gateway_core.load_recent_gateway_activity()
     assert recent[-1]["event"] == "managed_agent_added"
     assert recent[-1]["agent_name"] == "echo-bot"
+    # Registration provenance (#388): the event records which call path created
+    # the entry and whether an operator drove it, so registration anomalies are
+    # attributable from the audit log.
+    assert recent[-1]["source"] == "cli:add"
+    assert recent[-1]["operator_action"] is True
 
 
 def test_gateway_agents_add_pass_through_requires_fingerprint_approval(monkeypatch, tmp_path):

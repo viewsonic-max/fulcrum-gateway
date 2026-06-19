@@ -190,6 +190,7 @@ def _connect_local_pass_through_agent(
             workdir=str(fingerprint.get("cwd") or "").strip() or None,
             space_id=str(space_id or "").strip() or None,
             start=True,
+            source="session:autocreate",
         )
         registry = load_gateway_registry()
         entry = find_agent_entry(registry, normalized_name) or entry
