@@ -24,6 +24,7 @@ import typer
 from .. import gateway as gateway_core
 from ..agent_settings_profiles import write_model as write_model_to_settings
 from ..config import get_client, resolve_agent_name, resolve_space_id
+from ..gateway_storage import resolve_agent_token_file
 from ..mentions import merge_explicit_mentions_metadata
 from ..output import JSON_OPTION, console, print_json, unwrap_envelope
 from .listen import _is_self_authored, _iter_sse, _remember_reply_anchor, _should_respond, _strip_mention
@@ -135,8 +136,13 @@ def _gateway_agent_channel_defaults(agent_name: str) -> dict[str, str]:
     entry = gateway_core.find_agent_entry(registry, agent_name)
     if not entry:
         return {}
+    # token_file is stored relative to gateway_dir() for registry portability
+    # (#89). Resolve to an absolute path here: the channel bridge runs with
+    # cwd = the agent workdir, so a relative AX_TOKEN_FILE would resolve there
+    # (where it doesn't exist), fall back to the user PAT, and fail auth.
+    resolved_token_file = str(resolve_agent_token_file(entry)) if entry.get("token_file") else ""
     return {
-        "AX_TOKEN_FILE": str(entry.get("token_file") or ""),
+        "AX_TOKEN_FILE": resolved_token_file,
         "AX_BASE_URL": str(entry.get("base_url") or ""),
         "AX_AGENT_NAME": str(entry.get("name") or agent_name),
         "AX_AGENT_ID": str(entry.get("agent_id") or ""),
