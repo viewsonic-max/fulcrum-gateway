@@ -203,6 +203,33 @@ def _is_supervised_subprocess_runtime(runtime_type: object) -> bool:
     )
 
 
+def _apply_claude_code_channel_model(entry: dict[str, Any], *, log: Any = None) -> None:
+    """Write the registered model to the agent's settings.local.json on daemon start.
+
+    Only writes when the registry carries an explicit model — skips when model is
+    absent so a model an operator set via a profile fragment is not clobbered on
+    restart.  Parallel to how _scaffold_hermes_plugin_home regenerates config.yaml
+    on hermes start.  Errors are logged and swallowed so a bad write never prevents
+    the runtime from starting.
+    """
+    workdir = str(entry.get("workdir") or "").strip()
+    model = str(entry.get("model") or "").strip() or None
+    if not workdir or model is None:
+        return
+    try:
+        from .agent_settings_profiles import _gateway_runtime_to_client
+        from .agent_settings_profiles import write_model as _write_model
+
+        runtime_type = str(entry.get("runtime_type") or "").strip().lower()
+        client = _gateway_runtime_to_client(runtime_type)
+        if client is None:
+            return
+        _write_model(workdir, client, model)
+    except Exception as exc:
+        if log:
+            log(f"warning: could not write model to settings.local.json: {exc}")
+
+
 class ManagedAgentRuntime:
     """Listener + worker pair for one managed agent."""
 
@@ -565,6 +592,8 @@ class ManagedAgentRuntime:
         if _is_hermes_plugin_runtime(runtime_type):
             self._start_hermes_plugin_process(runtime_instance_id=runtime_instance_id)
             return
+        if runtime_type == "claude_code_channel":
+            _apply_claude_code_channel_model(self.entry, log=self._log)
         self._worker_thread = None
         if not _is_passive_runtime(self.entry.get("runtime_type")):
             self._worker_thread = threading.Thread(

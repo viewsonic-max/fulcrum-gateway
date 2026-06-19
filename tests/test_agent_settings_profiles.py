@@ -17,6 +17,7 @@ from ax_cli.agent_settings_profiles import (
     list_all,
     list_available,
     resolve,
+    write_model,
 )
 
 # ---------------------------------------------------------------------------
@@ -513,3 +514,66 @@ def test_agent_info_from_registry_raises_on_malformed_registry(tmp_path, monkeyp
     with pytest.raises(mod.RegistryLookupError, match="Could not read the Gateway registry") as excinfo:
         mod.agent_info_from_registry("agent-maker")
     assert "registry.json" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# write_model
+# ---------------------------------------------------------------------------
+
+
+def test_write_model_creates_file_with_model(tmp_path):
+    workdir = tmp_path / "agent"
+    workdir.mkdir()
+
+    written = write_model(workdir, "claude_cli", "claude-sonnet-4-6")
+
+    assert written == workdir / ".claude" / "settings.local.json"
+    result = json.loads(written.read_text())
+    assert result["model"] == "claude-sonnet-4-6"
+
+
+def test_write_model_preserves_existing_keys(tmp_path):
+    workdir = tmp_path / "agent"
+    _write_settings(workdir, {"permissions": {"allow": ["mcp__ax-channel__*"]}, "_axProfiles": ["base"]})
+
+    write_model(workdir, "claude_cli", "claude-haiku-4-5")
+
+    result = _read_settings(workdir)
+    assert result["model"] == "claude-haiku-4-5"
+    assert result["permissions"]["allow"] == ["mcp__ax-channel__*"]
+    assert result["_axProfiles"] == ["base"]
+
+
+def test_write_model_removes_key_when_none(tmp_path):
+    workdir = tmp_path / "agent"
+    _write_settings(workdir, {"model": "claude-sonnet-4-6", "_axProfiles": ["base"]})
+
+    write_model(workdir, "claude_cli", None)
+
+    result = _read_settings(workdir)
+    assert "model" not in result
+    assert result["_axProfiles"] == ["base"]
+
+
+def test_write_model_removes_key_when_empty_string(tmp_path):
+    workdir = tmp_path / "agent"
+    _write_settings(workdir, {"model": "claude-sonnet-4-6"})
+
+    write_model(workdir, "claude_cli", "")
+
+    result = _read_settings(workdir)
+    assert "model" not in result
+
+
+def test_write_model_creates_parent_dirs(tmp_path):
+    workdir = tmp_path / "deep" / "agent"
+
+    write_model(workdir, "claude_cli", "claude-opus-4-8")
+
+    result = json.loads((workdir / ".claude" / "settings.local.json").read_text())
+    assert result["model"] == "claude-opus-4-8"
+
+
+def test_write_model_rejects_unsupported_client(tmp_path):
+    with pytest.raises(ValueError, match="not supported"):
+        write_model(tmp_path, "hermes_plugin", "some-model")

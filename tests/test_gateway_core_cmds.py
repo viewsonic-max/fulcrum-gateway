@@ -3959,3 +3959,69 @@ def test_sentinel_session_corrupt_sidecar_resets_gracefully(tmp_path, monkeypatc
         runtime.start()
 
     assert runtime._sentinel_session_id("default") is None
+
+
+# ---------------------------------------------------------------------------
+# _apply_claude_code_channel_model
+# ---------------------------------------------------------------------------
+
+
+def test_apply_claude_code_channel_model_writes_model(tmp_path):
+    """Daemon helper writes model to settings.local.json on channel start."""
+    from ax_cli.gateway_runtime import _apply_claude_code_channel_model
+
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    entry = {"workdir": str(workdir), "model": "claude-sonnet-4-6", "runtime_type": "claude_code_channel"}
+
+    _apply_claude_code_channel_model(entry)
+
+    settings_path = workdir / ".claude" / "settings.local.json"
+    assert settings_path.exists()
+    result = json.loads(settings_path.read_text())
+    assert result["model"] == "claude-sonnet-4-6"
+
+
+def test_apply_claude_code_channel_model_no_op_without_workdir():
+    """No error and no write when workdir is absent from entry."""
+    from ax_cli.gateway_runtime import _apply_claude_code_channel_model
+
+    _apply_claude_code_channel_model({"model": "claude-sonnet-4-6", "runtime_type": "claude_code_channel"})
+
+
+def test_apply_claude_code_channel_model_preserves_profile_model_when_registry_has_none(tmp_path):
+    """When registry has no model, a profile-set model in settings.local.json is not clobbered."""
+    from ax_cli.gateway_runtime import _apply_claude_code_channel_model
+
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    settings_dir = workdir / ".claude"
+    settings_dir.mkdir()
+    (settings_dir / "settings.local.json").write_text(json.dumps({"model": "profile-model", "_axProfiles": ["cheap"]}))
+
+    _apply_claude_code_channel_model(
+        {"workdir": str(workdir), "model": None, "runtime_type": "claude_code_channel"}
+    )
+
+    result = json.loads((settings_dir / "settings.local.json").read_text())
+    assert result["model"] == "profile-model"
+    assert result["_axProfiles"] == ["cheap"]
+
+
+def test_apply_claude_code_channel_model_swallows_write_error(tmp_path, monkeypatch):
+    """A write failure is logged but never raises — runtime must still start."""
+    from ax_cli import agent_settings_profiles
+    from ax_cli.gateway_runtime import _apply_claude_code_channel_model
+
+    def _raise(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(agent_settings_profiles, "write_model", _raise)
+
+    errors = []
+    _apply_claude_code_channel_model(
+        {"workdir": str(tmp_path), "model": "claude-sonnet-4-6", "runtime_type": "claude_code_channel"},
+        log=errors.append,
+    )
+    assert len(errors) == 1
+    assert "warning" in errors[0]

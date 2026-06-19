@@ -260,6 +260,28 @@ def diff(profiles: list[str], client: str, workdir: str | Path, *, reset: bool =
     }
 
 
+def write_model(workdir: str | Path, client: str, model: str | None) -> Path:
+    """Write or remove the ``model`` key in the client's settings file in *workdir*.
+
+    Preserves all other keys including ``_axProfiles``. If *model* is None or
+    empty the key is removed. Creates the settings file and its parent directory
+    if they don't exist.
+
+    Returns the path written.
+    """
+    _require_supported_client(client)
+    path = _settings_path(workdir, client)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    current = _read_settings(workdir, client)
+    normalized = str(model or "").strip() or None
+    if normalized:
+        current["model"] = normalized
+    else:
+        current.pop("model", None)
+    path.write_text(json.dumps(current, indent=2, sort_keys=True) + "\n")
+    return path
+
+
 def apply(
     profiles: list[str],
     client: str,
