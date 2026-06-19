@@ -4025,3 +4025,116 @@ def test_apply_claude_code_channel_model_swallows_write_error(tmp_path, monkeypa
     )
     assert len(errors) == 1
     assert "warning" in errors[0]
+
+
+# ---------------------------------------------------------------------------
+# _monitor_hermes_plugin_process
+# ---------------------------------------------------------------------------
+
+
+def _make_hermes_runtime():
+    return gateway_core.ManagedAgentRuntime(
+        {
+            "name": "hp-test",
+            "agent_id": "aaaaaaaa-0000-0000-0000-000000000001",
+            "space_id": "space-1",
+            "base_url": "https://paxai.app",
+            "runtime_type": "hermes_plugin",
+        },
+        client_factory=lambda **kwargs: None,
+    )
+
+
+class _FakeAliveProcess:
+    pid = 12345
+    stdout = None
+
+    def poll(self):
+        return None
+
+
+class _FakePresenceClient:
+    def __init__(self, *, presence=None, fail=False):
+        self.calls: list[str] = []
+        self._presence = presence if presence is not None else {"last_seen_at": "2025-06-01T10:00:00+00:00"}
+        self._fail = fail
+
+    def get_agent_presence(self, identifier, *, space_id=None):
+        self.calls.append(identifier)
+        if self._fail:
+            raise OSError("network error")
+        return dict(self._presence)
+
+    def close(self):
+        pass
+
+
+def test_hermes_monitor_relays_backend_last_seen_at():
+    """#327: presence check relays backend last_seen_at to local state."""
+    client = _FakePresenceClient(presence={"last_seen_at": "2025-06-01T10:00:00+00:00"})
+    runtime = _make_hermes_runtime()
+    runtime._supervised_process = _FakeAliveProcess()
+    runtime._new_client = lambda: client
+    runtime._state["last_seen_at"] = "2020-01-01T00:00:00+00:00"
+
+    wait_iter = iter([False, True])
+    runtime.stop_event.wait = lambda timeout=None: next(wait_iter)
+
+    runtime._monitor_hermes_plugin_process()
+
+    assert client.calls, "get_agent_presence not called"
+    assert runtime._state["last_seen_at"] == "2025-06-01T10:00:00+00:00", (
+        "last_seen_at should reflect backend value, not local clock"
+    )
+
+
+def test_hermes_monitor_presence_failure_leaves_last_seen_unchanged():
+    """#327: a presence check error must not stamp last_seen_at."""
+    client = _FakePresenceClient(fail=True)
+    runtime = _make_hermes_runtime()
+    runtime._supervised_process = _FakeAliveProcess()
+    runtime._new_client = lambda: client
+    runtime._state["last_seen_at"] = "2020-01-01T00:00:00+00:00"
+
+    wait_iter = iter([False, True])
+    runtime.stop_event.wait = lambda timeout=None: next(wait_iter)
+
+    runtime._monitor_hermes_plugin_process()
+
+    assert runtime._state["last_seen_at"] == "2020-01-01T00:00:00+00:00", (
+        "last_seen_at must not update when presence check fails"
+    )
+
+
+def test_hermes_monitor_empty_presence_response_leaves_last_seen_unchanged():
+    """#327: an empty backend presence (no timestamp fields) must not stamp last_seen_at."""
+    client = _FakePresenceClient(presence={})
+    runtime = _make_hermes_runtime()
+    runtime._supervised_process = _FakeAliveProcess()
+    runtime._new_client = lambda: client
+    runtime._state["last_seen_at"] = "2020-01-01T00:00:00+00:00"
+
+    wait_iter = iter([False, True])
+    runtime.stop_event.wait = lambda timeout=None: next(wait_iter)
+
+    runtime._monitor_hermes_plugin_process()
+
+    assert runtime._state["last_seen_at"] == "2020-01-01T00:00:00+00:00"
+
+
+def test_hermes_monitor_presence_check_fires_once_per_interval():
+    """#327: presence check fires at most once per RUNTIME_HEARTBEAT_INTERVAL_SECONDS."""
+    client = _FakePresenceClient()
+    runtime = _make_hermes_runtime()
+    runtime._supervised_process = _FakeAliveProcess()
+    runtime._new_client = lambda: client
+
+    # Two rapid ticks: only the first should call get_agent_presence.
+    wait_iter = iter([False, False, True])
+    runtime.stop_event.wait = lambda timeout=None: next(wait_iter)
+
+    runtime._monitor_hermes_plugin_process()
+
+    assert len(client.calls) == 1, (
+        f"expected 1 presence check, got {len(client.calls)}"
+    )
