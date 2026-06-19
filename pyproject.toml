@@ -46,7 +46,7 @@ dev = [
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
-    "ruff==0.15.15",
+    "ruff==0.15.18",
     "twine>=6.2.0",
 ]
 mistral = [
@@ -70,7 +70,7 @@ pythonpath = ["."]
 addopts = ["-p", "no:pytest_postgresql"]
 
 [tool.ruff]
-required-version = "==0.15.15"
+required-version = "==0.15.18"
 target-version = "py311"
 line-length = 120
 extend-exclude = ["ax_cli/runtimes/hermes"]  # Vendored runtime — see ax_cli/runtimes/hermes/README.md
