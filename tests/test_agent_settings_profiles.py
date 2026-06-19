@@ -179,6 +179,61 @@ def test_resolve_multiple_profiles_merged(tmp_path, monkeypatch):
     assert set(result["permissions"]["allow"]) == {"mcp__ax-channel__*", "Bash(echo:*)"}
 
 
+def _write_model_profile_dir(tmp_path: Path, *, profile_name: str = "with_model", model: str = "claude-opus") -> Path:
+    d = tmp_path / "profiles" / "claude_cli"
+    d.mkdir(parents=True)
+    (d / f"{profile_name}.json").write_text(
+        json.dumps({"model": model, "permissions": {"allow": ["mcp__ax-channel__*"]}})
+    )
+    return tmp_path / "profiles"
+
+
+def test_resolve_rejects_profile_fragment_with_model(tmp_path, monkeypatch):
+    profiles_root = _write_model_profile_dir(tmp_path)
+    monkeypatch.setattr("ax_cli.agent_settings_profiles._PROFILES_DIR", profiles_root)
+
+    with pytest.raises(ValueError, match="with_model.*cannot set 'model'"):
+        resolve(["with_model"], "claude_cli")
+
+
+def test_resolve_rejects_model_in_second_profile(tmp_path, monkeypatch):
+    profiles_root = tmp_path / "profiles"
+    d = profiles_root / "claude_cli"
+    d.mkdir(parents=True)
+    (d / "base.json").write_text(json.dumps({"permissions": {"allow": ["mcp__ax-channel__*"]}}))
+    (d / "cheap.json").write_text(json.dumps({"model": "claude-haiku"}))
+    monkeypatch.setattr("ax_cli.agent_settings_profiles._PROFILES_DIR", profiles_root)
+
+    with pytest.raises(ValueError, match="cheap.*cannot set 'model'"):
+        resolve(["base", "cheap"], "claude_cli")
+
+
+def test_apply_rejects_model_profile_without_mutating_settings(tmp_path, monkeypatch):
+    profiles_root = _write_model_profile_dir(tmp_path)
+    monkeypatch.setattr("ax_cli.agent_settings_profiles._PROFILES_DIR", profiles_root)
+    workdir = tmp_path / "agent"
+    workdir.mkdir()
+    _write_settings(workdir, {"permissions": {"allow": ["existing"]}, "model": "registry-model"})
+
+    with pytest.raises(ValueError, match="cannot set 'model'"):
+        apply(["with_model"], "claude_cli", workdir)
+
+    result = _read_settings(workdir)
+    assert result["model"] == "registry-model"
+    assert result["permissions"]["allow"] == ["existing"]
+    assert "_axProfiles" not in result
+
+
+def test_diff_rejects_profile_fragment_with_model(tmp_path, monkeypatch):
+    profiles_root = _write_model_profile_dir(tmp_path)
+    monkeypatch.setattr("ax_cli.agent_settings_profiles._PROFILES_DIR", profiles_root)
+    workdir = tmp_path / "agent"
+    workdir.mkdir()
+
+    with pytest.raises(ValueError, match="cannot set 'model'"):
+        diff(["with_model"], "claude_cli", workdir)
+
+
 # ---------------------------------------------------------------------------
 # apply
 # ---------------------------------------------------------------------------

@@ -209,6 +209,29 @@ def test_profiles_apply_exits_when_no_workdir_found(tmp_path, monkeypatch):
     assert "workdir" in result.output.lower() or "workdir" in (result.stderr or "").lower()
 
 
+def test_profiles_apply_rejects_profile_with_model(tmp_path, monkeypatch):
+    profiles_root = tmp_path / "profiles" / "claude_cli"
+    profiles_root.mkdir(parents=True)
+    (profiles_root / "with_model.json").write_text(
+        json.dumps({"model": "claude-opus", "permissions": {"allow": ["mcp__ax-channel__*"]}})
+    )
+    monkeypatch.setattr("ax_cli.agent_settings_profiles._PROFILES_DIR", tmp_path / "profiles")
+    workdir = tmp_path / "agent"
+    workdir.mkdir()
+    _mock_claude_registry(monkeypatch, workdir)
+
+    result = runner.invoke(
+        app,
+        ["agents", "profiles", "apply", "agent-maker", "--profile", "with_model", "--workdir", str(workdir)],
+    )
+
+    assert result.exit_code == 1
+    output = " ".join(result.output.split())
+    assert "cannot set 'model'" in output
+    assert "gateway agents register --model" in output
+    assert not (workdir / ".claude" / "settings.local.json").exists()
+
+
 # ---------------------------------------------------------------------------
 # diff
 # ---------------------------------------------------------------------------

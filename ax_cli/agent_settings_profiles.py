@@ -25,6 +25,12 @@ _CLIENT_CONFIG: dict[str, dict[str, Any]] = {
     },
 }
 
+# Top-level settings keys profile fragments must not author for a given client.
+# `model` is owned by the Gateway registry (see GATEWAY-AGENT-PROFILES-001 / #378).
+_PROFILE_FORBIDDEN_TOP_LEVEL_KEYS: dict[str, frozenset[str]] = {
+    "claude_cli": frozenset({"model"}),
+}
+
 SUPPORTED_CLIENTS: frozenset[str] = frozenset(_CLIENT_CONFIG)
 
 # Maps Gateway `runtime_type` (how Gateway supervises the agent process) to the
@@ -124,7 +130,26 @@ def _load_profile_fragment(client: str, profile_name: str) -> dict[str, Any]:
     path = _profiles_dir(client) / f"{profile_name}.json"
     if not path.exists():
         raise FileNotFoundError(f"Profile '{profile_name}' not found for client '{client}' (looked in {path})")
-    return json.loads(path.read_text())
+    fragment = json.loads(path.read_text())
+    _reject_forbidden_profile_keys(client, profile_name, fragment)
+    return fragment
+
+
+def _reject_forbidden_profile_keys(client: str, profile_name: str, fragment: dict[str, Any]) -> None:
+    """Refuse profile fragments that author registry-owned top-level keys."""
+    forbidden = _PROFILE_FORBIDDEN_TOP_LEVEL_KEYS.get(client, frozenset())
+    for key in sorted(forbidden):
+        if key not in fragment:
+            continue
+        if key == "model":
+            raise ValueError(
+                f"Profile '{profile_name}' cannot set 'model'. "
+                "Set the agent model via the Gateway registry: "
+                "`ax gateway agents register --model <name>` or "
+                "`ax gateway agents update <agent> --model <name>` "
+                "(or the agent manifest `model` field)."
+            )
+        raise ValueError(f"Profile '{profile_name}' cannot set '{key}'.")
 
 
 def _deep_merge(base: dict[str, Any], overlay: dict[str, Any], path: tuple[str, ...] = ()) -> None:
