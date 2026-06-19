@@ -3901,3 +3901,61 @@ def test_sentinel_monitor_still_detects_clean_exit(tmp_path, monkeypatch):
 
     assert runtime._state["effective_state"] == "error"
     assert "exited with code 1" in (runtime._state.get("last_error") or "")
+
+
+# ---------------------------------------------------------------------------
+# #368 – sentinel_cli session persistence across daemon restarts
+# ---------------------------------------------------------------------------
+
+
+def _make_sentinel_runtime(tmp_path, monkeypatch):
+    monkeypatch.setenv("AX_CONFIG_DIR", str(tmp_path / "ax_config"))
+    return gateway_core.ManagedAgentRuntime(
+        {
+            "name": "nova",
+            "agent_id": "bbbbbbbb-0000-0000-0000-000000000001",
+            "space_id": "space-1",
+            "base_url": "https://paxai.app",
+            "runtime_type": "sentinel_cli",
+        },
+        client_factory=lambda **kwargs: None,
+    )
+
+
+def test_sentinel_session_persisted_to_disk(tmp_path, monkeypatch):
+    """#368: _remember_sentinel_session writes sessions.json alongside the agent token."""
+    runtime = _make_sentinel_runtime(tmp_path, monkeypatch)
+    runtime._remember_sentinel_session("default", "sess-abc123")
+
+    sessions_file = runtime._sessions_file()
+    assert sessions_file.exists(), "sessions.json should be created on first remember"
+    data = json.loads(sessions_file.read_text())
+    assert data["default"] == "sess-abc123"
+
+
+def test_sentinel_session_survives_restart(tmp_path, monkeypatch):
+    """#368: _start loads persisted sessions so --resume is passed after a daemon restart."""
+    runtime = _make_sentinel_runtime(tmp_path, monkeypatch)
+    runtime._remember_sentinel_session("default", "sess-abc123")
+
+    # Simulate a restart: call start() (it resets in-memory state and reloads from disk).
+    # sentinel_cli dispatches to _start_sentinel_inference_sdk_process — patch that.
+    with patch.object(runtime, "_start_sentinel_inference_sdk_process"):
+        runtime.start()
+
+    assert runtime._sentinel_session_id("default") == "sess-abc123", (
+        "session_id should survive a daemon restart"
+    )
+
+
+def test_sentinel_session_corrupt_sidecar_resets_gracefully(tmp_path, monkeypatch):
+    """#368: a corrupt sessions.json does not crash start() — resets to empty dict."""
+    runtime = _make_sentinel_runtime(tmp_path, monkeypatch)
+    sessions_file = runtime._sessions_file()
+    sessions_file.parent.mkdir(parents=True, exist_ok=True)
+    sessions_file.write_text("not valid json{{{")
+
+    with patch.object(runtime, "_start_sentinel_inference_sdk_process"):
+        runtime.start()
+
+    assert runtime._sentinel_session_id("default") is None

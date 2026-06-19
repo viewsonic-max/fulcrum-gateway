@@ -534,7 +534,12 @@ class ManagedAgentRuntime:
         self._reply_anchor_ids = set()
         self._seen_ids = set()
         self._completed_seen_ids = set()
-        self._sentinel_sessions = {}
+        try:
+            raw = self._sessions_file().read_text()
+            loaded = json.loads(raw)
+            self._sentinel_sessions = {k: v for k, v in loaded.items() if isinstance(k, str) and isinstance(v, str)}
+        except Exception:  # noqa: BLE001
+            self._sentinel_sessions = {}
         pending_items = load_agent_pending_messages(self.name) if _is_passive_runtime(runtime_type) else []
         backlog_depth = len(pending_items)
         runtime_instance_id = str(uuid.uuid4())
@@ -1361,6 +1366,9 @@ class ManagedAgentRuntime:
                 activity_message=activity or None,
             )
 
+    def _sessions_file(self) -> Path:
+        return agent_dir(self.name) / "sessions.json"
+
     def _sentinel_session_id(self, session_key: str) -> str | None:
         with self._state_lock:
             return self._sentinel_sessions.get(session_key)
@@ -1370,6 +1378,11 @@ class ManagedAgentRuntime:
             return
         with self._state_lock:
             self._sentinel_sessions[session_key] = session_id
+            try:
+                path = self._sessions_file()
+                path.write_text(json.dumps(self._sentinel_sessions, indent=2))
+            except Exception:  # noqa: BLE001
+                pass
 
     def _build_sentinel_cmd(self, session_id: str | None) -> list[str]:
         command_override = str(self.entry.get("sentinel_command") or "").strip()
@@ -1982,6 +1995,7 @@ from .gateway_hermes import (  # noqa: E402
 )
 from .gateway_storage import (  # noqa: E402
     _daemon_request_logger,
+    agent_dir,
     append_agent_pending_message,
     find_agent_entry,
     load_agent_pending_messages,
