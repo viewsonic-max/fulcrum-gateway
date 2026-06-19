@@ -148,6 +148,43 @@ def _check_honeypot(token: str, base_url: str) -> None:
 RATE_LIMIT_MAX_WAIT = 120.0  # shared cap for proactive and reactive rate-limit waits
 RATE_LIMIT_LOW_WATER = 10  # automated traffic (daemon, UI polling): yield early, leave headroom
 RATE_LIMIT_INTERACTIVE_LOW_WATER = 2  # human-initiated actions: run the window nearly to empty
+_RATE_LIMIT_RESET_EPOCH_THRESHOLD = 1_000_000_000  # values below are delta-seconds, not epoch
+
+
+def _normalize_rate_limit_reset(reset_hdr: str | None, *, now: float | None = None) -> float:
+    """Convert ``x-ratelimit-reset`` to an absolute epoch timestamp.
+
+    Production (paxai.app) emits absolute epoch seconds. Some servers emit
+    delta-seconds or HTTP-date; storing those raw values makes proactive
+    throttling silently no-op because ``wait_if_needed`` clamps negative waits
+    to zero.
+    """
+    import email.utils
+    import time as _time
+
+    if not reset_hdr or not str(reset_hdr).strip():
+        return 0.0
+    raw = str(reset_hdr).strip()
+    now = _time.time() if now is None else now
+
+    try:
+        value = float(raw)
+    except ValueError:
+        try:
+            dt = email.utils.parsedate_to_datetime(raw)
+            if dt.tzinfo is None:
+                import datetime
+
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            return dt.timestamp()
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+
+    if value <= 0:
+        return 0.0
+    if value < _RATE_LIMIT_RESET_EPOCH_THRESHOLD:
+        return now + value
+    return value
 
 
 class _RateLimitState:
@@ -273,13 +310,12 @@ class _RetryOnAuthClient:
         try:
             remaining_hdr = r.headers.get("x-ratelimit-remaining")
             reset_hdr = r.headers.get("x-ratelimit-reset")
+            reset_ts = _normalize_rate_limit_reset(reset_hdr)
             if remaining_hdr is not None:
                 remaining: int | None = int(remaining_hdr)
-                reset_ts = float(reset_hdr or "0")
                 self._rl.record(remaining, reset_ts)
             else:
                 remaining = None
-                reset_ts = float(reset_hdr or "0")
             if self._on_request_complete:
                 method = r.request.method if r.request else "?"
                 path = r.request.url.path if r.request else "?"
