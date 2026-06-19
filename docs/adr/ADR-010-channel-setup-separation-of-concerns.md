@@ -79,8 +79,8 @@ are role-specific, written on deploy or explicit profile update:
 > authored from the gateway registry, not by a profile: the daemon projects the
 > registered `model` into this same file on start for `claude_code_channel` (#361/#369).
 > Profiles must not author `model` (single-writer — #378). See
-> [GATEWAY-AGENT-PROFILES-001](../../specs/GATEWAY-AGENT-PROFILES-001/spec.md) "Model
-> authoring vs. profiles."
+> [GATEWAY-AGENT-PROFILES-001](../../specs/GATEWAY-AGENT-PROFILES-001/spec.md) "`model`
+> is not a profiles concern."
 
 These three layers are independently re-runnable for repair. A future one-command
 orchestrator could invoke all three in sequence (see the speculative Decision 4), but

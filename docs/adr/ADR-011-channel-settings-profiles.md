@@ -89,13 +89,7 @@ command file. The setup path calls `agent_settings_profiles.apply()` as an indep
 layer (today via `ax agents profiles apply`; a future one-command setup orchestrator
 would bundle it with the other layers). Module API is in GATEWAY-AGENT-PROFILES-001.
 
-### 5. Template carries the default profile list
-
-Template and registry entries carry a `channel_profiles` list, read when no profiles
-are specified explicitly. The flag form (`--profile` on `ax agents profiles apply`) is
-the shorthand for one-off setups; `--profile` is not a channel setup concept.
-
-### 6. Profiles entry point; shared module
+### 5. Profiles entry point; shared module
 
 `ax agents profiles apply` triggers profiles only — re-merges and rewrites
 `settings.local.json` without touching `.mcp.json`, the env file, or gateway state. It is
@@ -138,6 +132,6 @@ hand-configured workspaces.
 - **Negative:** Because `base` is a convention rather than an invariant, a manifest
   that omits it will produce an agent without the standard minimum permissions. This
   is intentional — the manifest is the specification — but operators authoring new
-  manifests should be aware. `ax agents profiles diff` will show the gap.
+  manifests should be aware.
 - **Open:** For clients with non-JSON settings formats, `agent_settings_profiles.apply()` needs a
   format dispatcher. Defer until a non-JSON runtime needs profiles.

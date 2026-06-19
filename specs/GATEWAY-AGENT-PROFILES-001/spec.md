@@ -80,7 +80,7 @@ rather than hand-editing JSON per agent.
 - Capability authorization for connector-policy namespaces (hermes, sentinel-SDK) — a separate mechanism (connector instance + tool policy); profiles do not address it. See `docs/agent-permission-model.md`
 - The one-command deployment orchestrator — future work, out of scope here
 - Profile file contents for specific roles — those are config, not spec
-- The `model` key — registry-authored, not a profiles concern (see "Model authoring vs. profiles")
+- The `model` key — registry-authored, not a profiles concern (see "`model` is not a profiles concern")
 
 ## Directory layout
 
@@ -89,7 +89,7 @@ Profiles are keyed by **`client`** (per ADR-014):
 ```text
 ax_cli/agent_profiles/
   claude_cli/
-    base.json          # enabledMcpjsonServers + reply/get_messages — every claude_cli agent
+    base.json          # enabledMcpjsonServers + permissions.allow mcp__ax-channel__* — every claude_cli agent
     agent-maker.json   # Bash permissions for ax gateway agent management commands
     code-reviewer.json # Read permissions for broad workspace read access
     ...
@@ -145,10 +145,10 @@ agent_settings_profiles.apply(profiles, client, workdir, *, reset=False) -> Path
 # unsupported clients.
 
 agent_settings_profiles.diff(profiles, client, workdir, *, reset=False) -> dict
-# Previews what applying `profiles` would change against the current settings file
-# (including keys a fragment would remove). With reset=True, previews the apply
-# --reset result. NOTE: this is a "preview this apply" diff, not a
-# matched/unmatched promotion-candidate report.
+# Previews what applying `profiles` would change against the current settings file.
+# Without reset, the merge is widen-only so the "remove" set is empty; with reset=True
+# it previews the apply --reset result (which can remove keys). NOTE: this is a
+# "preview this apply" diff, not a matched/unmatched promotion-candidate report.
 
 agent_settings_profiles.resolve(profiles, client) -> dict
 # Returns the merged profile dict without writing. Used by diff and dry-run display.
@@ -164,10 +164,6 @@ agent_settings_profiles.current_profile_list(workdir, client) -> list[str]
 
 agent_settings_profiles.agent_info_from_registry(agent_name) -> dict | None
 # Resolves an agent's workdir/client from the gateway registry for the CLI commands.
-
-agent_settings_profiles.write_model(workdir, client, model) -> Path
-# Sets/removes the top-level `model` key in the client's settings file, preserving
-# other keys including _axProfiles (see #361/#369). See "Model authoring vs. profiles".
 ```
 
 ## `ax agents profiles` subcommand tree
@@ -185,8 +181,8 @@ ax agents profiles list [--client <name>]
 ```
 
 Lists available profiles. With `--client` (e.g. `claude_cli`), filters to that
-client's directory; without it, lists all clients. Output is a table of profile
-name and brief description.
+client's directory; without it, lists all clients. Output is a table of client and
+profile name.
 
 ### `ax agents profiles show`
 
@@ -204,9 +200,9 @@ ax agents profiles diff <agent-name> --profile <name>... [--reset] [--client <na
 ```
 
 Previews what applying the given `--profile`(s) would change in the agent's
-`settings.local.json` — including keys a fragment would remove. `--reset` previews
-the `apply --reset` result (replace rather than merge). At least one `--profile` is
-required.
+`settings.local.json`. Without `--reset` the merge is widen-only (nothing is removed);
+`--reset` previews the `apply --reset` result (replace rather than merge, which can
+remove keys). At least one `--profile` is required.
 
 ### `ax agents profiles apply`
 
@@ -257,21 +253,20 @@ effective permissions match its declared role. **`--reset` is also the only way 
 > explicit `--profile` list and `--reset` only. To drop a profile today, re-`apply`
 > the desired list with `--reset`.
 
-## Model authoring vs. profiles *(#361 / #369 / #378)*
+## `model` is not a profiles concern
 
-`model` is **not** a profiles-layer concern, even though `write_model` lives in the
-same module and writes the same `settings.local.json`. The authoritative source for an
-agent's model is the **gateway registry** (`model` field, set via `--model` or a
+The agent's `model` is a **registry operational-config field**, not something profiles
+author. The authoritative source is the gateway registry (`model`, set via `--model` or a
 manifest — see [GATEWAY-MANAGED-AGENT-CONFIG-001](../GATEWAY-MANAGED-AGENT-CONFIG-001/spec.md)).
-For `claude_code_channel` the daemon projects that value into `settings.local.json` on
-start (#369); for `sentinel_cli` it is passed as `--model` per invocation.
+*How* that registry value reaches each runtime is out of scope for this spec — see
+GATEWAY-MANAGED-AGENT-CONFIG-001 for the field and #361/#369 for the per-runtime
+application path.
 
-This creates one rule the profiles layer must respect: **a profile fragment must not
-author `model`.** If it did, the profile and the registry would be two competing
-writers — the daemon would overwrite a profile-set model on restart while `_axProfiles`
-still claimed the profile was applied, leaving the file internally inconsistent.
-Enforcing single-writer (profiles refuse/strip `model`) is tracked in **#378**. Until
-that lands, do not document model-via-profile as a supported path.
+The one rule the profiles layer must respect: **a profile fragment must not author
+`model`.** If it did, the profile and the registry would be two competing writers,
+leaving `settings.local.json` internally inconsistent (a profile-authored model with the
+registry's value, or vice versa). This is convention today; single-writer enforcement
+(profiles refuse/strip `model`) is tracked in **#378**.
 
 ## Open questions
 
