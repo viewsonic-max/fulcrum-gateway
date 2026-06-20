@@ -258,7 +258,7 @@ def test_profiles_apply_rejects_profile_with_model(tmp_path, monkeypatch):
     assert result.exit_code == 1
     output = _flat(result.output)
     assert "cannot set 'model'" in output
-    assert "gateway agents register --model" in output
+    assert "gateway agents add --model" in output
     assert not (workdir / ".claude" / "settings.local.json").exists()
 
 

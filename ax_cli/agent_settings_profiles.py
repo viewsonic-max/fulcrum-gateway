@@ -145,7 +145,7 @@ def _reject_forbidden_profile_keys(client: str, profile_name: str, fragment: dic
             raise ValueError(
                 f"Profile '{profile_name}' cannot set 'model'. "
                 "Set the agent model via the Gateway registry: "
-                "`ax gateway agents register --model <name>` or "
+                "`ax gateway agents add --model <name>` or "
                 "`ax gateway agents update <agent> --model <name>` "
                 "(or the agent manifest `model` field)."
             )
