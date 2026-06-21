@@ -239,6 +239,29 @@ def test_profiles_apply_registry_unreadable_message(tmp_path, monkeypatch):
     assert "Is the Gateway running" not in output
 
 
+def test_profiles_apply_rejects_profile_with_model(tmp_path, monkeypatch):
+    profiles_root = tmp_path / "profiles" / "claude_cli"
+    profiles_root.mkdir(parents=True)
+    (profiles_root / "with_model.json").write_text(
+        json.dumps({"model": "claude-opus", "permissions": {"allow": ["mcp__ax-channel__*"]}})
+    )
+    monkeypatch.setattr("ax_cli.agent_settings_profiles._PROFILES_DIR", tmp_path / "profiles")
+    workdir = tmp_path / "agent"
+    workdir.mkdir()
+    _mock_claude_registry(monkeypatch, workdir)
+
+    result = runner.invoke(
+        app,
+        ["agents", "profiles", "apply", "agent-maker", "--profile", "with_model", "--workdir", str(workdir)],
+    )
+
+    assert result.exit_code == 1
+    output = _flat(result.output)
+    assert "cannot set 'model'" in output
+    assert "gateway agents add --model" in output
+    assert not (workdir / ".claude" / "settings.local.json").exists()
+
+
 # ---------------------------------------------------------------------------
 # diff
 # ---------------------------------------------------------------------------
