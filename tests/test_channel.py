@@ -729,7 +729,7 @@ def test_channel_tools_include_polling_fallback():
     asyncio.run(bridge.handle_tools_list(1))
 
     tools = bridge.writes[0]["result"]["tools"]
-    assert {tool["name"] for tool in tools} == {"reply", "get_messages"}
+    assert {tool["name"] for tool in tools} == {"reply", "get_messages", "channel_status"}
 
 
 def test_channel_get_messages_returns_pending_mentions():
