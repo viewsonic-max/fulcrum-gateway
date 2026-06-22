@@ -670,6 +670,94 @@ class ChannelBridge:
         self._last_message_id: str | None = None
         self._reply_anchor_ids: set[str] = set()
         self._pending_mentions: list[MentionEvent] = []
+        self._sse_lock = threading.Lock()
+        self._sse_connected = False
+        self._sse_last_error: str | None = None
+        self._sse_outage_notified = False
+        self._sse_watchdog: asyncio.Task[None] | None = None
+
+    def is_sse_connected(self) -> bool:
+        with self._sse_lock:
+            return self._sse_connected
+
+    def sse_last_error(self) -> str | None:
+        with self._sse_lock:
+            return self._sse_last_error
+
+    def _apply_sse_connected(self, connected: bool, *, error: str | None = None) -> None:
+        """Record platform SSE health and alert the Claude session once per outage."""
+        should_alert = False
+        with self._sse_lock:
+            self._sse_connected = connected
+            if error is not None:
+                self._sse_last_error = str(error)[:400]
+            if connected:
+                self._sse_outage_notified = False
+            elif not self._sse_outage_notified:
+                self._sse_outage_notified = True
+                should_alert = True
+        _touch_gateway_channel_entry(self.agent_name, sse_connected=connected)
+        if should_alert:
+            self.schedule_sse_disconnected_alert()
+
+    def schedule_sse_disconnected_alert(self) -> None:
+        if not self.loop or self.shutdown.is_set():
+            return
+
+        def _schedule() -> None:
+            asyncio.ensure_future(self._emit_sse_disconnected_alert())
+
+        self.loop.call_soon_threadsafe(_schedule)
+
+    async def _emit_sse_disconnected_alert(self) -> None:
+        await self.initialized.wait()
+        if self.shutdown.is_set() or self.is_sse_connected():
+            return
+        error = self.sse_last_error()
+        lines = [
+            "aX channel platform link is DOWN.",
+            f"@{self.agent_name} mentions will NOT be delivered until the SSE subscription reconnects.",
+            "",
+            "This MCP server can still respond to ping — that does not mean the platform link is healthy.",
+            "",
+            "Operator actions:",
+            "  1. Run `ax gateway agents show` and check Reachability for this agent.",
+            "  2. Reconnect this MCP server (restart the ax-channel process in Claude Code).",
+            "  3. If auth failed, re-mint the agent token.",
+        ]
+        if error:
+            lines.insert(2, f"Last error: {error}")
+        await self.send_notification(
+            "notifications/claude/channel",
+            {
+                "content": "\n".join(lines),
+                "meta": {
+                    "chat_id": self.space_id,
+                    "source": "ax",
+                    "space_id": self.space_id,
+                    "signal_kind": "sse_disconnected",
+                    "user": "ax-channel",
+                    "sender": "ax-channel",
+                },
+            },
+        )
+        self.log("emitted SSE disconnected alert to Claude session")
+
+    async def _sse_connect_watchdog(self) -> None:
+        """Alert if the platform SSE link is still down after the connect grace window."""
+        try:
+            await asyncio.sleep(_SSE_CONNECT_GRACE_SECONDS)
+            if self.shutdown.is_set() or self.is_sse_connected():
+                return
+            should_emit = False
+            with self._sse_lock:
+                if not self._sse_outage_notified:
+                    self._sse_outage_notified = True
+                    should_emit = True
+            if should_emit:
+                await self._emit_sse_disconnected_alert()
+        except asyncio.CancelledError:
+            return
 
     def log(self, message: str) -> None:
         if not self.debug:
@@ -832,7 +920,11 @@ class ChannelBridge:
                 "Messages from aX arrive via notifications/claude/channel. "
                 "Your transcript is not sent back to aX automatically. "
                 "Use the reply tool for every response you want posted back to aX. "
-                "Pass reply_to to target a specific incoming aX message_id; if omitted, the latest inbound message is used."
+                "Pass reply_to to target a specific incoming aX message_id; if omitted, the latest inbound message is used. "
+                "The MCP server can be up while the platform SSE subscription is down; "
+                "use the channel_status tool to check delivery health. "
+                "If channel_status reports sse_connected=false, tell the operator immediately — "
+                "mentions are being dropped until the link recovers."
             ),
         }
         await self.send_response(request_id, result)
@@ -878,6 +970,14 @@ class ChannelBridge:
                             },
                             "required": ["text"],
                         },
+                    },
+                    {
+                        "name": "channel_status",
+                        "description": (
+                            "Report whether the platform SSE subscription is healthy. "
+                            "MCP ping success does not imply mentions can be delivered."
+                        ),
+                        "inputSchema": {"type": "object", "properties": {}},
                     },
                     {
                         "name": "get_messages",
@@ -932,9 +1032,38 @@ class ChannelBridge:
             )
         await self.send_response(request_id, {"content": [{"type": "text", "text": text}]})
 
+    async def handle_channel_status(self, request_id: Any) -> None:
+        connected = self.is_sse_connected()
+        payload = {
+            "agent": self.agent_name,
+            "space_id": self.space_id,
+            "sse_connected": connected,
+            "last_error": self.sse_last_error(),
+        }
+        if connected:
+            text = (
+                f"Platform SSE subscription is UP for @{self.agent_name}. "
+                "aX mentions should be delivered to this Claude Code session."
+            )
+        else:
+            detail = self.sse_last_error() or "unknown"
+            text = (
+                f"Platform SSE subscription is DOWN for @{self.agent_name}. "
+                "MCP is running but aX mentions will NOT be delivered until the link reconnects.\n"
+                f"Last error: {detail}\n"
+                "Operator: run `ax gateway agents show`, reconnect ax-channel, or re-mint the agent token if auth failed."
+            )
+        await self.send_response(
+            request_id,
+            {"content": [{"type": "text", "text": text}], "structuredContent": payload},
+        )
+
     async def handle_tool_call(self, request_id: Any, params: dict[str, Any]) -> None:
         name = params.get("name")
         arguments = params.get("arguments") or {}
+        if name == "channel_status":
+            await self.handle_channel_status(request_id)
+            return
         if name == "get_messages":
             await self.handle_get_messages(request_id, arguments)
             return
@@ -1137,7 +1266,10 @@ class ChannelBridge:
 
     async def serve_stdio(self) -> None:
         self.loop = asyncio.get_running_loop()
+        sse_listener = threading.Thread(target=_sse_loop, args=(self,), daemon=True)
+        sse_listener.start()
         emitter = asyncio.create_task(self.emit_mentions())
+        self._sse_watchdog = asyncio.create_task(self._sse_connect_watchdog())
         try:
             while True:
                 line = await asyncio.to_thread(sys.stdin.readline)
@@ -1157,9 +1289,14 @@ class ChannelBridge:
                     await self.handle_notification(message)
         finally:
             self.shutdown.set()
+            if self._sse_watchdog is not None:
+                self._sse_watchdog.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._sse_watchdog
             emitter.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await emitter
+            sse_listener.join(timeout=5)
 
 
 def _resolve_agent_id(client, agent_name: str | None) -> str | None:
@@ -1178,6 +1315,7 @@ def _resolve_agent_id(client, agent_name: str | None) -> str | None:
 
 _SSE_RECONNECT_INTERVAL = 600  # reconnect every 10 min to refresh JWT before 15-min expiry
 _SSE_HEARTBEAT_INTERVAL = 30  # heartbeat to gateway every 30s independent of message activity
+_SSE_CONNECT_GRACE_SECONDS = 5.0  # alert if SSE never connects shortly after MCP attach
 
 # Defensive fallback for runtime progress messages that arrive without the
 # `metadata.streaming_reply.final=false` hint. Every branch is anchored with
@@ -1198,23 +1336,21 @@ _RUNTIME_PROGRESS_RE = re.compile(
 _LEADING_MENTION_RE = re.compile(r"^@[\w-]+\s*[-\u2014]?\s*")
 
 
-def _sse_heartbeat_loop(bridge: ChannelBridge, sse_connected: "list[bool]") -> None:
+def _sse_heartbeat_loop(bridge: ChannelBridge) -> None:
     """Periodically write SSE health to the gateway registry, independent of message activity."""
     while not bridge.shutdown.is_set():
         bridge.shutdown.wait(timeout=_SSE_HEARTBEAT_INTERVAL)
         if bridge.shutdown.is_set():
             break
-        _touch_gateway_channel_entry(bridge.agent_name, sse_connected=sse_connected[0])
+        _touch_gateway_channel_entry(bridge.agent_name, sse_connected=bridge.is_sse_connected())
 
 
 def _sse_loop(bridge: ChannelBridge) -> None:
     seen_ids: set[str] = set()
     backoff = 1
     bridge.log(f"listening for @{bridge.agent_name} in {bridge.space_id}")
-    # Shared mutable flag so _sse_heartbeat_loop can read the current SSE state.
-    sse_connected: list[bool] = [False]
 
-    heartbeat = threading.Thread(target=_sse_heartbeat_loop, args=(bridge, sse_connected), daemon=True)
+    heartbeat = threading.Thread(target=_sse_heartbeat_loop, args=(bridge,), daemon=True)
     heartbeat.start()
 
     while not bridge.shutdown.is_set():
@@ -1224,8 +1360,7 @@ def _sse_loop(bridge: ChannelBridge) -> None:
                 if response.status_code != 200:
                     raise ConnectionError(f"SSE failed: {response.status_code}")
                 backoff = 1
-                sse_connected[0] = True
-                _touch_gateway_channel_entry(bridge.agent_name, sse_connected=True)
+                bridge._apply_sse_connected(True)
                 bridge.log(f"SSE connected (status {response.status_code})")
                 for event_type, data in _iter_sse(response):
                     if bridge.shutdown.is_set():
@@ -1407,14 +1542,12 @@ def _sse_loop(bridge: ChannelBridge) -> None:
                         break
         except (httpx.ConnectError, httpx.ReadTimeout, ConnectionError) as exc:
             bridge.log(f"SSE reconnect in {backoff}s after: {exc}")
-            sse_connected[0] = False
-            _touch_gateway_channel_entry(bridge.agent_name, sse_connected=False)
+            bridge._apply_sse_connected(False, error=str(exc))
             time.sleep(backoff)
             backoff = min(backoff * 2, 60)
         except Exception as exc:  # pragma: no cover - live path
             bridge.log(f"unexpected SSE error: {exc}")
-            sse_connected[0] = False
-            _touch_gateway_channel_entry(bridge.agent_name, sse_connected=False)
+            bridge._apply_sse_connected(False, error=str(exc))
             time.sleep(backoff)
             backoff = min(backoff * 2, 60)
 
@@ -1516,12 +1649,9 @@ def channel(
         sse_connected=False,
     )
 
-    listener = threading.Thread(target=_sse_loop, args=(bridge,), daemon=True)
-    listener.start()
     try:
         asyncio.run(bridge.serve_stdio())
     except KeyboardInterrupt:
         bridge.shutdown.set()
     finally:
         bridge.shutdown.set()
-        listener.join(timeout=5)

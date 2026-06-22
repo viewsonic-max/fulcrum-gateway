@@ -2362,3 +2362,119 @@ class TestSseLoopGatewayTouches:
         ping_touches = [t for t in touches if t.get("event") == "channel_ping"]
         assert ping_touches, "expected a channel_ping touch"
         assert all("sse_connected" not in t for t in ping_touches), "channel_ping must not write sse_connected"
+
+
+# ---------------------------------------------------------------------------
+# SSE operator visibility — Claude session alerts (#386)
+# ---------------------------------------------------------------------------
+
+
+class TestSseOperatorVisibility:
+    def test_apply_sse_disconnected_emits_alert_once(self, monkeypatch):
+        monkeypatch.setattr(channel_mod, "_touch_gateway_channel_entry", lambda *a, **kw: None)
+        client = FakeClient()
+        bridge = CaptureBridge(client)
+        bridge.initialized.set()
+
+        async def run():
+            bridge.loop = asyncio.get_running_loop()
+            bridge._apply_sse_connected(False, error="SSE failed: 401")
+            await asyncio.sleep(0.05)
+            bridge._apply_sse_connected(False, error="SSE failed: 401")
+            await asyncio.sleep(0.05)
+
+        asyncio.run(run())
+
+        alerts = [
+            w
+            for w in bridge.writes
+            if w.get("method") == "notifications/claude/channel"
+            and (w.get("params") or {}).get("meta", {}).get("signal_kind") == "sse_disconnected"
+        ]
+        assert len(alerts) == 1
+        content = alerts[0]["params"]["content"]
+        assert "platform link is DOWN" in content
+        assert "mentions will NOT be delivered" in content
+        assert "SSE failed: 401" in content
+
+    def test_apply_sse_reconnect_clears_outage_and_can_alert_again(self, monkeypatch):
+        monkeypatch.setattr(channel_mod, "_touch_gateway_channel_entry", lambda *a, **kw: None)
+        client = FakeClient()
+        bridge = CaptureBridge(client)
+        bridge.initialized.set()
+
+        async def run():
+            bridge.loop = asyncio.get_running_loop()
+            bridge._apply_sse_connected(False, error="first outage")
+            await asyncio.sleep(0.05)
+            bridge._apply_sse_connected(True)
+            await asyncio.sleep(0.05)
+            bridge._apply_sse_connected(False, error="second outage")
+            await asyncio.sleep(0.05)
+
+        asyncio.run(run())
+
+        alerts = [
+            w
+            for w in bridge.writes
+            if w.get("method") == "notifications/claude/channel"
+            and (w.get("params") or {}).get("meta", {}).get("signal_kind") == "sse_disconnected"
+        ]
+        assert len(alerts) == 2
+
+    def test_channel_status_tool_reports_disconnected(self, monkeypatch):
+        monkeypatch.setattr(channel_mod, "_touch_gateway_channel_entry", lambda *a, **kw: None)
+        client = FakeClient()
+        bridge = CaptureBridge(client)
+        bridge._apply_sse_connected(False, error="auth rejected")
+
+        asyncio.run(bridge.handle_tool_call(1, {"name": "channel_status", "arguments": {}}))
+
+        result = bridge.writes[0]["result"]
+        assert "DOWN" in result["content"][0]["text"]
+        assert result["structuredContent"]["sse_connected"] is False
+        assert result["structuredContent"]["last_error"] == "auth rejected"
+
+    def test_channel_status_tool_reports_connected(self, monkeypatch):
+        monkeypatch.setattr(channel_mod, "_touch_gateway_channel_entry", lambda *a, **kw: None)
+        client = FakeClient()
+        bridge = CaptureBridge(client)
+        bridge._apply_sse_connected(True)
+
+        asyncio.run(bridge.handle_tool_call(1, {"name": "channel_status", "arguments": {}}))
+
+        result = bridge.writes[0]["result"]
+        assert "UP" in result["content"][0]["text"]
+        assert result["structuredContent"]["sse_connected"] is True
+
+    def test_initialize_mentions_channel_status_tool(self):
+        client = FakeClient()
+        bridge = CaptureBridge(client)
+
+        asyncio.run(bridge.handle_initialize(1))
+
+        instructions = bridge.writes[0]["result"]["instructions"]
+        assert "channel_status" in instructions
+        assert "sse_connected=false" in instructions
+
+    def test_sse_connect_watchdog_alerts_after_grace(self, monkeypatch):
+        monkeypatch.setattr(channel_mod, "_touch_gateway_channel_entry", lambda *a, **kw: None)
+        monkeypatch.setattr(channel_mod, "_SSE_CONNECT_GRACE_SECONDS", 0.05)
+        client = FakeClient()
+        bridge = CaptureBridge(client)
+        bridge.initialized.set()
+
+        async def run():
+            bridge.loop = asyncio.get_running_loop()
+            await bridge._sse_connect_watchdog()
+            await asyncio.sleep(0.05)
+
+        asyncio.run(run())
+
+        alerts = [
+            w
+            for w in bridge.writes
+            if w.get("method") == "notifications/claude/channel"
+            and (w.get("params") or {}).get("meta", {}).get("signal_kind") == "sse_disconnected"
+        ]
+        assert len(alerts) == 1
