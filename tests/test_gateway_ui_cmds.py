@@ -129,8 +129,8 @@ def test_render_gateway_ui_page_contains_local_dashboard_shell():
 def test_gateway_ui_handler_serves_status_and_agent_detail(monkeypatch, tmp_path):
     config_dir = tmp_path / "config"
     monkeypatch.setenv("AX_CONFIG_DIR", str(config_dir))
-    monkeypatch.setattr(gateway_core, "_scan_gateway_process_pids", lambda: [])
-    monkeypatch.setattr(gateway_core, "_scan_gateway_ui_process_pids", lambda: [])
+    monkeypatch.setattr("ax_cli.gateway_storage._scan_gateway_process_pids", lambda: [])
+    monkeypatch.setattr("ax_cli.gateway_storage._scan_gateway_ui_process_pids", lambda: [])
     gateway_core.save_gateway_session(
         {
             "token": "axp_u_test.token",
