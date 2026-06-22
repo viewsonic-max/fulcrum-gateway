@@ -9,6 +9,7 @@
 - [ADR-007](../../docs/adr/ADR-007-agent-classes-and-signals.md) — agent classes and signaling contracts
 - [ADR-012](../../docs/adr/ADR-012-vendor-sdk-security-cleanup.md) — sentinel_inference_sdk and sentinel_hermes_sdk separation
 - [ADR-014](../../docs/adr/ADR-014-client-field-unification.md) — `client` field semantics
+- [GATEWAY-AGENT-PROFILES-001](../GATEWAY-AGENT-PROFILES-001/spec.md) — the profiles system that consumes the `client` field (writes `settings.local.json` for MCP-host clients)
 - [docs/agent-manifests.md](../../docs/agent-manifests.md) — declarative manifest format (PR #235)
 
 ---

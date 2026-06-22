@@ -10,7 +10,7 @@
 
 The Gateway supervisor manages several agent runtime types. Two of them — `hermes_sentinel` and `sentinel_cli` — supported CLI subprocess backends (Claude Code and Codex) in addition to SDK-based LLM calls. All CLI subprocess paths hardcoded permission bypass flags that gave agents unrestricted tool access with no per-agent authorization.
 
-The profiles system that enables safe pre-authorization for these agents is defined in [ADR-011](ADR-011-channel-settings-profiles.md) and implemented in [GATEWAY-AGENT-DEPLOY-001](../../specs/GATEWAY-AGENT-DEPLOY-001/spec.md). ADR-012 is a prerequisite to that system being meaningful: there is no point managing `settings.local.json` permission grants while a hardcoded bypass flag makes them optional.
+The profiles system that enables safe pre-authorization for these agents is defined in [ADR-011](ADR-011-channel-settings-profiles.md) and specified in [GATEWAY-AGENT-PROFILES-001](../../specs/GATEWAY-AGENT-PROFILES-001/spec.md). ADR-012 is a prerequisite to that system being meaningful: there is no point managing `settings.local.json` permission grants while a hardcoded bypass flag makes them optional.
 
 - `--dangerously-skip-permissions` — hardcoded in every Claude CLI invocation across three code paths: `gateway.py:_build_sentinel_claude_cmd`, `sentinel.py:_build_claude_cmd`, and `runtimes/claude_cli.py`
 - `--dangerously-bypass-approvals-and-sandbox` — hardcoded in every Codex CLI invocation: `gateway.py:_build_sentinel_codex_cmd`, `sentinel.py:_build_codex_cmd`, and `runtimes/codex_cli.py`
@@ -42,7 +42,7 @@ The flag is removed from:
 - `sentinel.py:_build_claude_cmd` (sentinel_inference_sdk Claude — dead code, removed with the legacy path)
 - `runtimes/claude_cli.py` (sentinel_inference_sdk Claude CLI plugin)
 
-Consequence: `sentinel_cli` Claude agents without a `settings.local.json` permissions configuration will have text-only capability after this change. The agent can respond to messages but cannot invoke tools. Operators must apply a profile to grant tool access — see [ADR-011](ADR-011-channel-settings-profiles.md) for the profiles system and [GATEWAY-AGENT-DEPLOY-001](../../specs/GATEWAY-AGENT-DEPLOY-001/spec.md) for `ax agents deploy` and `ax agents profiles apply`. This is the intended behavior — tool access should be explicitly authorized, not implicitly granted.
+Consequence: `sentinel_cli` Claude agents without a `settings.local.json` permissions configuration will have text-only capability after this change. The agent can respond to messages but cannot invoke tools. Operators must apply a profile to grant tool access — see [ADR-011](ADR-011-channel-settings-profiles.md) and [GATEWAY-AGENT-PROFILES-001](../../specs/GATEWAY-AGENT-PROFILES-001/spec.md) for the profiles system and `ax agents profiles apply`. This is the intended behavior — tool access should be explicitly authorized, not implicitly granted.
 
 ### 2. Remove the Codex CLI runtime entirely
 
@@ -112,7 +112,7 @@ Consequences:
 | Change | Impact | Migration |
 |---|---|---|
 | `runtime_type: hermes_sentinel` no longer valid | All existing `hermes_sentinel` agents | Update registry entry: `ax gateway agents update <name> --type sentinel_inference_sdk` |
-| `sentinel_cli` Claude agents lose unrestricted tool access | Agents without `settings.local.json` become text-only | Apply a profile: `ax agents profiles apply <name> --runtime claude --profile base` |
+| `sentinel_cli` Claude agents lose unrestricted tool access | Agents without `settings.local.json` become text-only | Apply a profile: `ax agents profiles apply <name> --profile base` |
 | Codex CLI runtime removed | Any agent using `runtime_type: sentinel_cli` with `sentinel_runtime: codex` | No path within Gateway; use `openai_sdk` under `sentinel_inference_sdk` for OpenAI models |
 | `--runtime codex/codex_cli` removed from `sentinel_inference_sdk` argparse | Agent configs passing `--runtime codex` to `sentinel.py` | Switch to `--runtime openai_sdk` |
 | `client: hermes_sdk` no longer valid within `sentinel_inference_sdk` | Any `sentinel_inference_sdk` agent relying on the `hermes_sdk` default or explicit setting | Change `runtime_type` to `sentinel_hermes_sdk`; remove `client` / `sentinel_sdk_runtime` field |
@@ -134,4 +134,4 @@ Consequences:
 
 The updated permission model is in [agent-permission-model.md](../agent-permission-model.md).
 
-The permission analysis that drove this ADR also produced a concept not yet in PR #231: **agent classes** — declarative bundles specifying runtime type, profiles, connector policy, system prompt, and model. An agent class is the spec that `ax agents deploy` materializes; it is the unit the platform UI would expose to users as a named archetype. This concept needs to be back-ported into [ADR-011](ADR-011-channel-settings-profiles.md) and [GATEWAY-AGENT-DEPLOY-001](../../specs/GATEWAY-AGENT-DEPLOY-001/spec.md) before agent class support is implemented.
+The permission analysis that drove this ADR also produced a concept now called **agent archetypes** — declarative bundles specifying runtime type, profiles, connector policy, system prompt, and model. (Deliberately *not* "agent class": ADR-007 owns that term for the five signaling-contract classes.) An archetype is the spec a future one-command setup orchestrator would materialize; it is the unit the platform UI would expose as a named role. The permission-surface distinction (file-based profiles vs. connector policy) has been back-ported into [ADR-011](ADR-011-channel-settings-profiles.md) and `docs/agent-permission-model.md`; the archetype-driven orchestrator remains future work (see ADR-010 Decision 4).

@@ -35,11 +35,11 @@ This is an identity governance mechanism, not a tool permission mechanism.
 
 ### 2. Claude Code tool approval dialogs
 
-When Claude Code runs interactively, it presents a per-tool approval dialog to the human at the terminal before executing certain operations. This is a human-in-the-loop mechanism for supervised sessions.
+When Claude Code runs interactively, it presents a per-tool approval dialog to the human at the terminal before executing certain operations — a human-in-the-loop mechanism for supervised sessions. Claude Code can also route those decisions programmatically: declarative `allow`/`deny`/`ask` rules, permission modes, the Agent SDK `canUseTool` callback, or an MCP `--permission-prompt-tool`.
 
-**Headless agents cannot use this mechanism.** In headless (`-p`/`--print`) mode, there is no terminal and no human. Gateway has no mechanism to receive a Claude Code tool approval request, route it to the platform UI, wait for a response, and send it back to Claude. The stream-json event format that Gateway reads (`assistant`, `content_block_delta`, `result`) contains no `permission_request` event type.
+**Fulcrum does not wire any of these up as an interactive runtime-approval channel today.** The reason is **separation of authority**, not the absence of a human: an agent usually has a human partner, but that partner is not necessarily authorized to grant what the agent might ask for. Capability authorization is a governance decision made by whoever constructs and deploys the agent; forwarding prompts to whoever happens to be collaborating with the agent at runtime would let an unauthorized party escalate its scope. (Concretely, there is also no path today: the stream-json event format Gateway reads — `assistant`, `content_block_delta`, `result` — carries no `permission_request` event, and `sentinel_cli` runs headless `-p` with no terminal at all.)
 
-The correct model for headless agents is **pre-authorization**: define permitted tools upfront, and the agent operates autonomously within that boundary. This is what `settings.local.json` permissions and connector policy provide.
+The current model is therefore **pre-authorization**: declare the permitted tools upfront (`allow`) and the capabilities the agent must never request (`deny`), and the agent operates within that fixed boundary. This is what `settings.local.json` permissions and connector policy provide. Forwarding *selected* prompts to an appropriately-authorized human may be added later — but only once the surface such prompts can arrive on is narrowed and the blast radius of any single approval is bounded. See [GATEWAY-AGENT-PROFILES-001](../specs/GATEWAY-AGENT-PROFILES-001/spec.md) "Why this exists."
 
 ---
 
@@ -66,7 +66,7 @@ Additional pre-authorization is provided by `settings.local.json` in the agent w
 - Multiple MCP servers can be addressed independently in the same file
 - `settings.local.json` is per-agent-workdir — one file per agent identity
 
-The `profiles` system (`ax agents profiles apply`) manages this file. A profile is a named JSON fragment that deep-merges into `settings.local.json`. The `base` profile for `claude` grants `mcp__ax-channel__*` — the minimum needed for the agent to receive and reply to messages via the platform.
+The `profiles` system (`ax agents profiles apply`) manages this file. A profile is a named JSON fragment that deep-merges into `settings.local.json`. The `base` profile for `claude_cli` grants `mcp__ax-channel__*` — the minimum needed for the agent to receive and reply to messages via the platform.
 
 ### `sentinel_cli` (Claude) — headless Claude CLI subprocess
 
@@ -77,10 +77,10 @@ No permission bypass flag is injected. The agent's capability authorization is d
 To grant tool access, apply a profile before running the agent:
 
 ```bash
-ax agents profiles apply <agent-name> --runtime claude --profile base
+ax agents profiles apply <agent-name> --profile base
 ```
 
-The profiles system is defined in [ADR-011](adr/ADR-011-channel-settings-profiles.md). The full deployment sequence — gateway registration, client-layer setup, and profile application in one command — is specified in [GATEWAY-AGENT-DEPLOY-001](../specs/GATEWAY-AGENT-DEPLOY-001/spec.md).
+The profiles system is defined in [ADR-011](adr/ADR-011-channel-settings-profiles.md). Today setup runs as individual steps — gateway registration, client-layer setup (`ax channel setup`), and profile application (`ax agents profiles apply`); a one-command orchestrator that bundles them is possible future work.
 
 `--allowedTools` may also be set in the registry entry's `allowed_tools` field. It restricts which tools Claude is offered at the CLI level, independent of `settings.local.json`. Both apply simultaneously — a tool must pass both filters to be usable.
 
@@ -88,7 +88,7 @@ The profiles system is defined in [ADR-011](adr/ADR-011-channel-settings-profile
 
 ### `hermes_plugin` — long-lived Hermes process
 
-Gateway scaffolds `<workdir>/.hermes/` and spawns `hermes gateway run` as a long-lived process. The agent communicates with the aX platform via the bundled ax-platform plugin.
+Gateway scaffolds `<workdir>/.hermes/` and spawns `hermes gateway run` as a long-lived process. The agent communicates with the Fulcrum platform via the bundled ax-platform plugin.
 
 **Hermes plugin agents have no Bash tool by default.** All tools available to the agent come through the Gateway connector system. An agent without a `connector_ref` binding has no outbound tools.
 
@@ -104,7 +104,7 @@ These runtimes call vendor LLM APIs directly — no Claude CLI subprocess, no pe
 
 ### `sentinel_hermes_sdk` — in-process Hermes AIAgent loop
 
-Gateway spawns the same `sentinel.py` supervisor with `--runtime hermes_sdk`, running the full in-process Hermes AIAgent loop (90-turn, parallel tool execution, context compression). Supports Bedrock IAM auth, OpenRouter, Anthropic API, and Codex backends via the `model` field (e.g. `bedrock:claude-sonnet-4-6`, `anthropic:claude-sonnet-4-6`).
+Gateway spawns the same `sentinel.py` supervisor with a hardcoded `--runtime hermes_sdk` (daemon-set for this runtime type, not operator-configurable), running the full in-process Hermes AIAgent loop (90-turn, parallel tool execution, context compression). Supports Bedrock IAM auth, OpenRouter, Anthropic API, and Codex backends via the `model` field (e.g. `bedrock:claude-sonnet-4-6`, `anthropic:claude-sonnet-4-6`).
 
 Tool authorization uses `_secure_hermes_tools` (a security shim on the Hermes tool registry) in addition to the standard connector policy. This is the preferred runtime for coding sentinels that need session continuity and rich tool use.
 
@@ -214,14 +214,23 @@ Connectors are not subject to this concern: connector tools are invoked through 
 
 ---
 
-## Direction: profiles and agent classes
+## Direction: profiles and agent archetypes
 
-**Profiles** are the management surface for capability authorization on Claude-based runtimes. A profile is a named JSON fragment organized by runtime under `ax_cli/agent_profiles/{runtime}/`. Profiles are flat (no inheritance) and compose by ordered union. Applied via `ax agents profiles apply`, which writes `settings.local.json` into the agent workdir. The profiles system design is in [ADR-011](adr/ADR-011-channel-settings-profiles.md); the deploy orchestration (gateway registration + client setup + profile application in one command) is in [GATEWAY-AGENT-DEPLOY-001](../specs/GATEWAY-AGENT-DEPLOY-001/spec.md) (PR #231).
+**Profiles** are the management surface for capability authorization on the
+**MCP-host / coding-agent client namespace** (per ADR-014) — clients whose capability
+surface is a `settings.local.json`-style additive permission document (`claude_cli`
+today, `cursor`/`windsurf` plausible future members). A profile is a named JSON fragment
+organized by `client` under `ax_cli/agent_profiles/{client}/`.
+Profiles are flat (no inheritance) and compose by ordered union. Applied via `ax agents
+profiles apply`, which writes `settings.local.json` into the agent workdir. The profiles
+system design is in [ADR-011](adr/ADR-011-channel-settings-profiles.md). A one-command
+orchestration that would bundle profile application with the other setup layers is
+possible future work.
 
-For `vendor_sdk` and `hermes_plugin` agents, the capability authorization equivalent is a connector instance with a specific tool policy — there is no `settings.local.json` for SDK runtimes. Connector policy is managed separately.
+For `vendor_sdk` and `hermes_plugin` agents, the capability authorization equivalent is a connector instance with a specific tool policy — there is no `settings.local.json` for SDK runtimes. Connector policy is managed separately. This is the boundary of the profiles model: it serves the MCP-host (file-based-permission) namespace, not the connector-policy namespaces.
 
-**Agent classes** extend this model one level up. An agent class is a bundle that specifies a complete capability envelope: runtime type, profile(s) to apply, connector to bind and its tool policy, system prompt, and model. It is what the platform UI would offer to users as a named agent archetype — a code-reviewer, an agent-maker, a PR responder. The `ax agents deploy` command is the materialization step; an agent class is the declarative spec that drives it.
+**Agent archetypes** extend this model one level up. An archetype is a bundle that specifies a complete capability envelope: runtime type, profile(s) to apply, connector to bind and its tool policy, system prompt, and model. It is what the platform UI would offer to users as a named agent archetype — a code-reviewer, an agent-maker, a PR responder. A future one-command setup orchestrator would be the materialization step; an archetype is the declarative spec that drives it.
 
-This concept emerged from the permission model analysis in ADR-012 and is not yet reflected in the ADR-011/GATEWAY-AGENT-DEPLOY-001 work in PR #231. It needs to be back-ported there before agent class support is implemented.
+This concept emerged from the permission model analysis in ADR-012. The permission-surface distinction (file-based profiles vs. connector policy) has been back-ported into the ADR-010/ADR-011 reconciliation; the archetype-driven materialization remains future work.
 
-Platform-level ACLs on which agent classes a given user may instantiate are planned but not yet specified.
+Platform-level ACLs on which agent archetypes a given user may instantiate are planned but not yet specified.

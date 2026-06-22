@@ -1,7 +1,7 @@
 # GATEWAY-RUNTIME-AUTOSETUP-001: Zero-Touch Runtime Setup
 
-**Status:** v1 draft
-**Owner:** @pulse, reviewer @orion
+**Status:** v1 draft — updated 2026-06-05 (ownership transfer; added claude_code_channel section)
+**Owner:** @markgalpin (transferred from @pulse/@orion)
 **Date:** 2026-04-25
 **Source directives:**
 - @madtank 2026-04-25: "we should make it real easy to do. We should just have it built into the repository… and if they enabled different agent versions, it's going to install the packages."
@@ -79,7 +79,27 @@ The contract: **picking a runtime in the wizard should make it work.** If someth
 - **Install path:** check `OLLAMA_BASE_URL` reachability; if unreachable, surface "Start Ollama: `ollama serve`" with a copy button.
 - **Models:** pre-pulled list comes from `ollama_setup_status()`. If recommended model not present, offer `ollama pull <model>` as a copyable command (we do NOT auto-pull — multi-GB downloads are operator decision).
 
+### Claude Code Channel
+
+- **Source:** Claude Code CLI (`claude`), assumed already installed by the operator.
+- **Install path:** none — no binary download, git clone, or pip install required.
+- **Setup contract:** after `ax gateway agents add`, two commands produce a launch-ready
+  workspace — `ax channel setup <name> --workdir <path>` then
+  `ax agents profiles apply <name> --profile base`:
+  - `<workdir>/.mcp.json` — MCP server config pointing Claude Code at the `ax-channel` bridge (written by `ax channel setup`)
+  - `~/.claude/channels/ax-channel/<name>.env` — channel identity env (written by `ax channel setup`)
+  - `<workdir>/.claude/settings.local.json` — pre-approves MCP server load and tool calls so first launch is silent (written by `ax agents profiles apply`; see [GATEWAY-AGENT-PROFILES-001](../GATEWAY-AGENT-PROFILES-001/spec.md))
+  A future one-command setup orchestrator may bundle these layers.
+- **Why setup is safe:** all writes are purely local config file generation with no network
+  operations and no side effects beyond writing small files.
+- **Repair path:** re-run individual layer commands without re-registering:
+  - Client mechanics only: `ax channel setup <name> --workdir <path>`
+  - Permissions only: `ax agents profiles apply <name> --profile base`
+- **Preflight:** verify `claude --version` resolves. If not found, surface
+  "Install Claude Code: [claude.ai/code](https://claude.ai/code)" — we do not install it.
+
 ### Echo
+
 - No setup. Always ready.
 
 ## CLI parity (the primary path)
@@ -93,21 +113,8 @@ ax gateway runtime status hermes
 # → ready: true | false, resolved_path, summary
 ```
 
-(These commands need to be added — they don't exist today.)
-
-## Current PR boundary
-
-This spec is intentionally ahead of the current Gateway demo implementation.
-The demo branch should not claim full zero-touch runtime setup until these
-pieces land:
-
-- `ax gateway runtime status/install` CLI commands;
-- local API template preflight/install endpoints;
-- explicit Hermes `install_ready` vs `provider_ready` fields;
-- wizard controls for provider authentication.
-
-For this PR, Hermes setup gaps should remain visible through Doctor/setup
-errors rather than being described as automatically fixed.
+These commands are implemented (`ax gateway runtime status/install` and the
+local `/api/templates/{id}/install` endpoint are live).
 
 ## Security model
 
@@ -201,3 +208,8 @@ ax gateway agents remove demo-hermes
 ## Open questions
 
 - For air-gapped environments: a `--local <path>` flag on `runtime install` to register an existing local checkout without clone. Spec'd but not yet implemented.
+
+## TODOs
+
+- **`install_ready` vs `provider_ready` fields in the preflight payload** — the spec defines a two-field preflight response distinguishing "runtime installed" from "LLM provider authenticated", but the current `hermes_setup_status()` implementation does not surface these as separate fields. The wizard and Doctor both need this split to guide operators through the provider auth step without re-triggering the clone step.
+- **Wizard controls for provider authentication** — the Connect wizard should surface provider auth options (Codex OAuth, OpenRouter key, Anthropic key) as a distinct step after install, with per-provider UX as described in the Hermes section above. Currently the wizard surfaces a generic setup error rather than actionable provider auth buttons.
