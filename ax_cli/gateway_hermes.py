@@ -456,6 +456,60 @@ def _scaffold_hermes_plugin_home(entry: dict[str, Any]) -> Path:
     return home
 
 
+def _hermes_plugin_model(entry: dict[str, Any]) -> str | None:
+    """Return the Gateway-registered model for a hermes_plugin agent, if any.
+
+    Unlike ``_hermes_sentinel_model``, there is no env/default fallback —
+    absent an explicit registration we seed from the operator config only.
+    """
+    for key in ("hermes_model", "runtime_model", "model"):
+        value = str(entry.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _hermes_provider_for_model(model: str) -> str | None:
+    """Best-effort Hermes provider id from a registered model string."""
+    normalized = str(model or "").strip()
+    if not normalized:
+        return None
+    if ":" in normalized and not normalized.startswith("us."):
+        hint, name = normalized.split(":", 1)
+    else:
+        hint, name = "", normalized
+    hint = hint.lower()
+    name_lower = name.lower()
+    if hint == "codex" or (not hint and "gpt" in name_lower):
+        return "openai-codex"
+    if hint == "anthropic" or (not hint and "claude" in name_lower):
+        return "anthropic"
+    if hint == "openrouter":
+        return "openrouter"
+    if hint == "bedrock":
+        return "anthropic"
+    return hint or None
+
+
+def _apply_registered_hermes_model(cfg: dict[str, Any], entry: dict[str, Any]) -> None:
+    """Thread the Gateway-registered model into a scaffolded Hermes config."""
+    registered_model = _hermes_plugin_model(entry)
+    if not registered_model:
+        return
+    registered_provider = str(entry.get("provider") or "").strip() or _hermes_provider_for_model(registered_model)
+    model_cfg = cfg.get("model")
+    if isinstance(model_cfg, dict):
+        model_cfg = dict(model_cfg)
+        model_cfg["default"] = registered_model
+        if registered_provider:
+            model_cfg["provider"] = registered_provider
+        cfg["model"] = model_cfg
+    else:
+        cfg["model"] = registered_model
+    if registered_provider:
+        cfg["provider"] = registered_provider
+
+
 def _render_hermes_plugin_config_yaml(entry: dict[str, Any], *, home: Path, operator_home: Path) -> None:
     """Write ``$HERMES_HOME/config.yaml`` with ``terminal.cwd`` pinned to the
     agent's workdir AND the aX platform plugin enabled, seeded from the
@@ -541,6 +595,7 @@ def _render_hermes_plugin_config_yaml(entry: dict[str, Any], *, home: Path, oper
     if isinstance(disabled, list) and AX_PLUGIN_NAME in disabled:
         plugins_cfg["disabled"] = [name for name in disabled if name != AX_PLUGIN_NAME]
     cfg["plugins"] = plugins_cfg
+    _apply_registered_hermes_model(cfg, entry)
     try:
         import yaml
 
@@ -548,7 +603,9 @@ def _render_hermes_plugin_config_yaml(entry: dict[str, Any], *, home: Path, oper
     except Exception:
         # Last-resort minimal config so the agent can still come up with a
         # correct terminal.cwd even if the operator config is unreadable.
-        rendered = f"terminal:\n  cwd: {workdir}\n"
+        registered_model = _hermes_plugin_model(entry)
+        model_line = f"model: {registered_model}\n" if registered_model else ""
+        rendered = f"terminal:\n  cwd: {workdir}\n{model_line}"
     # Replace any stale symlink from earlier scaffolds before writing.
     if target.is_symlink():
         try:
