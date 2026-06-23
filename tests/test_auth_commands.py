@@ -1,8 +1,8 @@
 import json
 import tomllib
 
-import click
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from ax_cli.commands import auth
@@ -674,7 +674,7 @@ def test_resolve_login_token_empty_prompt_exits(monkeypatch):
     monkeypatch.setattr(auth.typer, "prompt", lambda *a, **kw: "   ")
     monkeypatch.setattr(auth.console, "print", lambda *a, **kw: printed.append(str(a[0]) if a else ""))
     monkeypatch.setattr(auth.err_console, "print", lambda *a, **kw: printed.append(str(a[0]) if a else ""))
-    with pytest.raises((SystemExit, click.exceptions.Exit)):
+    with pytest.raises((SystemExit, typer.Exit)):
         auth._resolve_login_token(None)
     assert any("Token required" in p for p in printed)
 
@@ -696,7 +696,7 @@ def test_login_user_token_verification_failure(monkeypatch, config_dir):
 
     monkeypatch.setattr("ax_cli.token_cache.TokenExchanger", FailingExchanger)
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)):
+    with pytest.raises((SystemExit, typer.Exit)):
         auth.login_user("axp_u_bad.token", base_url="https://paxai.app")
 
 

@@ -208,7 +208,7 @@ def test_check_avatar_url_ok():
 
 
 def test_check_avatar_url_too_long():
-    from click.exceptions import Exit
+    from typer import Exit
 
     with pytest.raises(Exit):
         _check_avatar_url_length("x" * (AVATAR_URL_MAX_LENGTH + 1))

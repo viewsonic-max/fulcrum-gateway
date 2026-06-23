@@ -124,7 +124,7 @@ def test_load_profile_missing_exits(monkeypatch, tmp_path):
     monkeypatch.setattr(profile, "PROFILES_DIR", profiles_dir)
 
     import pytest
-    from click.exceptions import Exit
+    from typer import Exit
 
     with pytest.raises(Exit):
         profile._load_profile("nonexistent")

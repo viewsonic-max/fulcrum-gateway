@@ -15,9 +15,9 @@ appear in user-facing output.
 import json
 from unittest.mock import MagicMock
 
-import click
 import httpx
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from ax_cli.main import app
@@ -26,7 +26,7 @@ from ax_cli.output import handle_error
 runner = CliRunner()
 
 
-_EXIT_TYPES = (SystemExit, click.exceptions.Exit)
+_EXIT_TYPES = (SystemExit, typer.Exit)
 
 
 @pytest.fixture

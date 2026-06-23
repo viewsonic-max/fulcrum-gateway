@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from click.exceptions import Exit
+from typer import Exit
 
 from ax_cli import config as config_module
 from ax_cli.config import (

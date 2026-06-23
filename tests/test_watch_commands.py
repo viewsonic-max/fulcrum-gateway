@@ -3,9 +3,9 @@
 import json
 import time
 
-import click.exceptions
 import httpx
 import pytest
+import typer
 
 from ax_cli.commands.watch import _iter_sse, _matches, _watch_poll
 
@@ -374,7 +374,7 @@ def test_watch_poll_timeout(monkeypatch):
     monkeypatch.setattr("ax_cli.commands.watch.time.time", fake_time)
 
     client = _FakeClient(responses=[[]])
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", timeout=5, quiet=True)
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 1
 
@@ -395,7 +395,7 @@ def test_watch_poll_final_response_exits_zero(monkeypatch):
     final_msg = {"display_name": "bot", "content": "Done! All tasks complete."}
     client = _FakeClient(responses=[[final_msg]])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", timeout=300, quiet=True)
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 0
 
@@ -410,7 +410,7 @@ def test_watch_poll_skips_own_messages(monkeypatch):
     own_msg = {"display_name": "me", "content": "I said something"}
     client = _FakeClient(responses=[[own_msg], [own_msg]])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", timeout=1, quiet=True)
     # Should timeout because it never finds a message from another agent
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 1
@@ -426,7 +426,7 @@ def test_watch_poll_from_agent_filter(monkeypatch):
     wrong_agent_msg = {"display_name": "other", "content": "Not from target"}
     client = _FakeClient(responses=[[wrong_agent_msg], [wrong_agent_msg]])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", from_agent="target_bot", timeout=1, quiet=True)
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 1
 
@@ -440,7 +440,7 @@ def test_watch_poll_from_agent_match(monkeypatch):
     msg = {"display_name": "target_bot", "content": "Result ready"}
     client = _FakeClient(responses=[[msg]])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", from_agent="target_bot", timeout=300, quiet=True)
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 0
 
@@ -455,7 +455,7 @@ def test_watch_poll_working_message_continues(monkeypatch):
     working_msg = {"display_name": "bot", "content": "Working on it...\nTool: analyze\nStep 2"}
     client = _FakeClient(responses=[[working_msg], [working_msg]])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", timeout=1, quiet=True)
     # Times out because the message never stops being "Working..."
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 1
@@ -471,7 +471,7 @@ def test_watch_poll_working_then_final(monkeypatch):
     final_msg = {"display_name": "bot", "content": "All done!"}
     client = _FakeClient(responses=[[working_msg], [final_msg]])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", timeout=300, quiet=True)
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 0
 
@@ -487,7 +487,7 @@ def test_watch_poll_http_error_continues(monkeypatch):
     final_msg = {"display_name": "bot", "content": "Done"}
     client = _FakeClient(responses=[error, [final_msg]])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", timeout=300, quiet=True)
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 0
 
@@ -501,7 +501,7 @@ def test_watch_poll_dict_envelope(monkeypatch):
     msg = {"display_name": "bot", "content": "Done"}
     client = _FakeClient(responses=[{"messages": [msg]}])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", timeout=300, quiet=True)
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 0
 
@@ -515,7 +515,7 @@ def test_watch_poll_json_output(monkeypatch, capsys):
     msg = {"display_name": "bot", "content": "Result: 42"}
     client = _FakeClient(responses=[[msg]])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", timeout=300, output_json=True, quiet=True)
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 0
 
@@ -533,7 +533,7 @@ def test_watch_poll_verbose_output(monkeypatch, capsys):
     msg = {"display_name": "bot", "content": "Hello world"}
     client = _FakeClient(responses=[[msg]])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", timeout=300, quiet=False, output_json=False)
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 0
 
@@ -548,7 +548,7 @@ def test_watch_poll_long_content_truncated(monkeypatch, capsys):
     msg = {"display_name": "bot", "content": long_content}
     client = _FakeClient(responses=[[msg]])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", timeout=300, quiet=False, output_json=False)
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 0
 
@@ -566,7 +566,7 @@ def test_watch_poll_sender_handle_fallback(monkeypatch):
     msg = {"sender_handle": "bot", "content": "Done"}
     client = _FakeClient(responses=[[msg]])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", timeout=300, quiet=True)
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 0
 
@@ -588,7 +588,7 @@ def test_watch_poll_timeout_verbose(monkeypatch, capsys):
 
     client = _FakeClient(responses=[[]])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", timeout=5, quiet=False)
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 1
 
@@ -610,7 +610,7 @@ def test_watch_poll_conditions_display_from_agent(monkeypatch, capsys):
 
     client = _FakeClient(responses=[[]])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", from_agent="mybot", timeout=1, quiet=False)
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 1
 
@@ -632,7 +632,7 @@ def test_watch_poll_conditions_display_any_agent(monkeypatch, capsys):
 
     client = _FakeClient(responses=[[]])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", timeout=1, quiet=False)
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 1
 
@@ -650,7 +650,7 @@ def test_watch_poll_working_verbose_shows_tool_lines(monkeypatch, capsys):
     }
     client = _FakeClient(responses=[[working_msg], [working_msg]])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", timeout=1, quiet=False)
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 1
 
@@ -666,7 +666,7 @@ def test_watch_poll_read_error_continues(monkeypatch):
     final_msg = {"display_name": "bot", "content": "Done"}
     client = _FakeClient(responses=[error, [final_msg]])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", timeout=300, quiet=True)
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 0
 
@@ -684,6 +684,6 @@ def test_watch_poll_http_status_error_continues(monkeypatch):
     final_msg = {"display_name": "bot", "content": "Done"}
     client = _FakeClient(responses=[error, [final_msg]])
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)) as exc_info:
+    with pytest.raises((SystemExit, typer.Exit)) as exc_info:
         _watch_poll(client, space_id="sp1", timeout=300, quiet=True)
     assert getattr(exc_info.value, "exit_code", getattr(exc_info.value, "code", None)) == 0

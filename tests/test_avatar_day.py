@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import base64
 
-import click
 import httpx
 import pytest
 import typer
@@ -73,9 +72,9 @@ def test_avatar_url_length_ok_under_cap():
 
 def test_avatar_url_length_rejected_over_cap():
     long = "x" * (AVATAR_URL_MAX_LENGTH + 1)
-    with pytest.raises((typer.Exit, click.exceptions.Exit)) as exc:
+    with pytest.raises(typer.Exit) as exc:
         _check_avatar_url_length(long)
-    # Both typer.Exit and click.exceptions.Exit expose .exit_code
+    # typer.Exit exposes .exit_code
     assert getattr(exc.value, "exit_code", getattr(exc.value, "code", None)) == 1
 
 

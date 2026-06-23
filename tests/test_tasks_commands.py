@@ -573,7 +573,7 @@ def test_resolve_assignee_id_not_found():
     from unittest.mock import MagicMock
 
     import pytest
-    from click.exceptions import Exit
+    from typer import Exit
 
     client = MagicMock()
     client.list_agents.return_value = [{"id": "agent-1", "name": "alice"}]

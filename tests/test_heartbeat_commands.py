@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-import click.exceptions
 import httpx
+import typer
 from typer.testing import CliRunner
 
 from ax_cli.main import app
@@ -362,7 +362,7 @@ def test_load_store_invalid_json(tmp_path):
     path.write_text("{not valid json")
     import pytest
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)):
+    with pytest.raises((SystemExit, typer.Exit)):
         _load_store(path)
 
 
@@ -374,7 +374,7 @@ def test_load_store_non_dict(tmp_path):
     path.write_text('"just a string"')
     import pytest
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)):
+    with pytest.raises((SystemExit, typer.Exit)):
         _load_store(path)
 
 
@@ -386,7 +386,7 @@ def test_load_store_non_list_history(tmp_path):
     path.write_text(json.dumps({"version": 1, "history": "not-a-list"}))
     import pytest
 
-    with pytest.raises((SystemExit, click.exceptions.Exit)):
+    with pytest.raises((SystemExit, typer.Exit)):
         _load_store(path)
 
 
