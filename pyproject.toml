@@ -26,7 +26,7 @@ classifiers = [
 dependencies = [
     "typer>=0.25.1,<0.26",
     "httpx>=0.28.1",
-    "rich>=13.0",
+    "rich>=15.0.0",
     "pyyaml>=6.0.3",
     "tomli-w>=1.2.0",
 ]
