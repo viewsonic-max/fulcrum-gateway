@@ -50,7 +50,7 @@ dev = [
     "twine>=6.2.0",
 ]
 mistral = [
-    "mistralai>=2.0,<3.0",
+    "mistralai>=2.4.13,<3.0",
 ]
 mcp = [
     # Gates the report_gen MCP server's SQL AST safety layer. svg_viz has no
