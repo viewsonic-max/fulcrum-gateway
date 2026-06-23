@@ -55,12 +55,12 @@ mistral = [
 mcp = [
     # Gates the report_gen MCP server's SQL AST safety layer. svg_viz has no
     # runtime deps beyond stdlib. See ax_cli/runtimes/mcp_servers/README.md.
-    "sqlglot>=22.0",
+    "sqlglot>=30.11.0",
 ]
 mcp-postgres = [
     # Postgres backend for report_gen. Default backend is SQLite (zero deps);
     # only install this extra if you set AX_REPORT_GEN_DB_KIND=postgres.
-    "sqlglot>=22.0",
+    "sqlglot>=30.11.0",
     "psycopg[binary]>=3.3.4",
 ]
 
