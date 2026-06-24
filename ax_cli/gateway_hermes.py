@@ -510,6 +510,50 @@ def _apply_registered_hermes_model(cfg: dict[str, Any], entry: dict[str, Any]) -
         cfg["provider"] = registered_provider
 
 
+def _hermes_plugin_disabled_toolsets(entry: dict[str, Any]) -> list[str]:
+    """Return the registry-stored disabled toolsets for a hermes_plugin agent.
+
+    Operator-supplied via ``ax gateway agents add|update --disable-toolset``
+    (#366). Names are passed through as-is; Hermes owns the toolset namespace.
+    """
+    raw = entry.get("disabled_toolsets")
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        name = str(item or "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def _apply_hermes_disabled_toolsets(cfg: dict[str, Any], entry: dict[str, Any]) -> None:
+    """Union the registry-stored disabled toolsets into ``agent.disabled_toolsets``.
+
+    Per-agent restrictions stack on top of the operator's defaults; if the
+    operator already disabled a toolset, the agent's list does not remove it.
+    """
+    agent_disabled = _hermes_plugin_disabled_toolsets(entry)
+    if not agent_disabled:
+        return
+    agent_cfg = cfg.get("agent")
+    if not isinstance(agent_cfg, dict):
+        agent_cfg = {}
+    existing = agent_cfg.get("disabled_toolsets")
+    merged: list[str] = []
+    seen: set[str] = set()
+    for source in (existing if isinstance(existing, list) else [], agent_disabled):
+        for item in source:
+            name = str(item or "").strip()
+            if name and name not in seen:
+                seen.add(name)
+                merged.append(name)
+    agent_cfg["disabled_toolsets"] = merged
+    cfg["agent"] = agent_cfg
+
+
 def _render_hermes_plugin_config_yaml(entry: dict[str, Any], *, home: Path, operator_home: Path) -> None:
     """Write ``$HERMES_HOME/config.yaml`` with ``terminal.cwd`` pinned to the
     agent's workdir AND the aX platform plugin enabled, seeded from the
@@ -596,6 +640,7 @@ def _render_hermes_plugin_config_yaml(entry: dict[str, Any], *, home: Path, oper
         plugins_cfg["disabled"] = [name for name in disabled if name != AX_PLUGIN_NAME]
     cfg["plugins"] = plugins_cfg
     _apply_registered_hermes_model(cfg, entry)
+    _apply_hermes_disabled_toolsets(cfg, entry)
     try:
         import yaml
 

@@ -423,3 +423,44 @@ def test_provider_field_round_trips_through_manifest(tmp_path):
     # serialize_toml emits the provider line
     toml_text = serialize_toml(exported)
     assert 'provider = "openai-codex"' in toml_text
+
+
+def test_parse_disabled_toolsets_accepts_list_of_strings(tmp_path):
+    """#366: disabled_toolsets manifest field accepts a list of strings."""
+    p = tmp_path / "agent.toml"
+    p.write_text('name = "pr-reviewer"\ndisabled_toolsets = ["terminal", "code_execution"]\n')
+    m = parse_manifest(p)
+    assert m["disabled_toolsets"] == ["terminal", "code_execution"]
+
+
+def test_parse_bad_disabled_toolsets_type_rejects(tmp_path):
+    p = tmp_path / "agent.toml"
+    p.write_text('name = "x"\ndisabled_toolsets = "terminal"\n')
+    with pytest.raises(ManifestError, match="disabled_toolsets"):
+        parse_manifest(p)
+
+
+def test_parse_disabled_toolsets_with_non_string_entries_rejects(tmp_path):
+    p = tmp_path / "agent.toml"
+    p.write_text('name = "x"\ndisabled_toolsets = ["terminal", 42]\n')
+    with pytest.raises(ManifestError, match="disabled_toolsets"):
+        parse_manifest(p)
+
+
+def test_build_register_kwargs_threads_disabled_toolsets():
+    m = {"name": "x", "type": "hermes_plugin", "disabled_toolsets": ["terminal"]}
+    kw = build_register_kwargs(m)
+    assert kw["disabled_toolsets"] == ["terminal"]
+
+
+def test_build_update_kwargs_threads_disabled_toolsets(tmp_path):
+    m = {"name": "x", "disabled_toolsets": ["code_execution"]}
+    sentinel = object()
+    kw = build_update_kwargs(m, unset_sentinel=sentinel)
+    assert kw["disabled_toolsets"] == ["code_execution"]
+
+
+def test_entry_to_manifest_round_trips_disabled_toolsets():
+    entry = {"name": "x", "disabled_toolsets": ["terminal", "tts"]}
+    m = entry_to_manifest(entry)
+    assert m["disabled_toolsets"] == ["terminal", "tts"]

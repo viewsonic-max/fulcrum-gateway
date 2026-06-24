@@ -190,6 +190,23 @@ def _resolve_system_prompt_input(
     return current
 
 
+def _normalize_disabled_toolsets(values: list[str] | None) -> list[str]:
+    """Trim, dedupe, and preserve order for ``--disable-toolset`` values (#366).
+
+    Names pass through as-is; Hermes owns the toolset namespace.
+    """
+    if not values:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in values:
+        name = str(raw or "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
 def _normalize_connector_ref(connector_ref: str) -> str:
     """Resolve and validate a connector registry reference (name or id)."""
     from ..connectors import ConnectorNotFoundError, find_connector
@@ -276,6 +293,7 @@ def _register_managed_agent(
     allowed_users: str | None = None,
     connector_ref: str | None = None,
     agent_client: str | None = None,
+    disabled_toolsets: list[str] | None = None,
     start: bool = True,
     source: str | None = None,
 ) -> dict:
@@ -326,6 +344,10 @@ def _register_managed_agent(
         raise ValueError("--provider is only supported for hermes_plugin runtimes.")
     if normalized_provider:
         _validate_hermes_provider(normalized_provider)
+
+    normalized_disabled_toolsets = _normalize_disabled_toolsets(disabled_toolsets)
+    if normalized_disabled_toolsets and runtime_type != "hermes_plugin":
+        raise ValueError("--disable-toolset is only supported for hermes_plugin runtimes.")
 
     normalized_agent_client = str(agent_client or "").strip() or None
     if normalized_agent_client:
@@ -453,6 +475,8 @@ def _register_managed_agent(
         entry_payload["provider"] = normalized_provider
     if agent_client and str(agent_client).strip():
         entry_payload["client"] = str(agent_client).strip()
+    if normalized_disabled_toolsets:
+        entry_payload["disabled_toolsets"] = normalized_disabled_toolsets
     if requires_approval:
         entry_payload["install_id"] = str(uuid.uuid4())
     entry = upsert_agent_entry(registry, entry_payload)
@@ -747,6 +771,8 @@ def _update_managed_agent(
     connector_ref: str | object = _UNSET,
     agent_client: str | object = _UNSET,
     python_path: str | object = _UNSET,
+    disabled_toolsets: list[str] | object = _UNSET,
+    clear_disabled_toolsets: bool = False,
     desired_state: str | None = None,
 ) -> dict:
     name = name.strip()
@@ -863,6 +889,15 @@ def _update_managed_agent(
     if normalized_provider:
         _validate_hermes_provider(normalized_provider)
         entry["provider"] = normalized_provider
+
+    if disabled_toolsets is not _UNSET:
+        ts_list = _normalize_disabled_toolsets(disabled_toolsets)  # type: ignore[arg-type]
+        if ts_list:
+            if runtime_effective != "hermes_plugin":
+                raise ValueError("--disable-toolset is only supported for hermes_plugin runtimes.")
+            entry["disabled_toolsets"] = ts_list
+    if clear_disabled_toolsets:
+        entry.pop("disabled_toolsets", None)
 
     if desired_state is not None:
         normalized_desired = desired_state.lower().strip()
@@ -1638,6 +1673,16 @@ def add_agent(
         "--client",
         help=_CLIENT_HELP,
     ),
+    disable_toolset: list[str] = typer.Option(
+        [],
+        "--disable-toolset",
+        help=(
+            "Hermes plugin runtime only: disable a Hermes toolset for this agent (e.g. terminal, "
+            "code_execution, computer_use). Repeat the flag for multiple toolsets. Names pass through "
+            "to Hermes — see Hermes docs for available toolsets. Stacks on top of any operator-side "
+            "disabled_toolsets in ~/.hermes/config.yaml."
+        ),
+    ),
     start: bool = typer.Option(True, "--start/--no-start", help="Desired running state after registration"),
     as_json: bool = JSON_OPTION,
 ):
@@ -1684,6 +1729,7 @@ def add_agent(
             allowed_users=allowed_users,
             connector_ref=connector_ref,
             agent_client=client,
+            disabled_toolsets=disable_toolset,
             start=start,
             source="cli:add",
         )
@@ -1782,6 +1828,20 @@ def update_agent(
         "--python",
         help="Path to the Python interpreter used by sentinel_inference_sdk agents. Pass an empty string to clear.",
     ),
+    disable_toolset: list[str] = typer.Option(
+        [],
+        "--disable-toolset",
+        help=(
+            "Hermes plugin runtime only: replace the agent's disabled-toolsets list with the values "
+            "passed (repeat the flag for multiple). Use --clear-disabled-toolsets to remove all "
+            "restrictions."
+        ),
+    ),
+    clear_disabled_toolsets: bool = typer.Option(
+        False,
+        "--clear-disabled-toolsets",
+        help="Remove the agent's disabled-toolsets list entirely (restores operator defaults).",
+    ),
     desired_state: str = typer.Option(None, "--desired-state", help="running | stopped"),
     as_json: bool = JSON_OPTION,
 ):
@@ -1814,6 +1874,8 @@ def update_agent(
             connector_ref=connector_ref if connector_ref is not None else _UNSET,
             agent_client=client if client is not None else _UNSET,
             python_path=python_path if python_path is not None else _UNSET,
+            disabled_toolsets=disable_toolset if disable_toolset else _UNSET,
+            clear_disabled_toolsets=clear_disabled_toolsets,
             desired_state=desired_state,
         )
     except (LookupError, ValueError) as exc:
