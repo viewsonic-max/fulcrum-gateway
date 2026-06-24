@@ -166,6 +166,67 @@ def test_scaffold_renders_config_yaml_with_pinned_terminal_cwd(tmp_path, monkeyp
     assert rendered["providers"]["openai-codex"]["default_model"] == "gpt-5.5"
 
 
+def test_scaffold_overrides_operator_model_with_registered_model_flat(tmp_path, monkeypatch):
+    """Gateway-registered --model must win over the operator default (#351)."""
+    yaml = pytest.importorskip("yaml")
+    fake_home = tmp_path / "operator-home"
+    operator_hermes = fake_home / ".hermes"
+    operator_hermes.mkdir(parents=True)
+    (operator_hermes / "config.yaml").write_text(
+        yaml.safe_dump({"model": "google/gemini-3.1-pro-preview", "provider": "nous"})
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    entry = _base_entry(tmp_path)
+    entry["model"] = "codex:gpt-5.5"
+    home = gateway_core._scaffold_hermes_plugin_home(entry)
+    rendered = yaml.safe_load((home / "config.yaml").read_text())
+
+    assert rendered["model"] == "codex:gpt-5.5"
+    assert rendered["provider"] == "openai-codex"
+
+
+def test_scaffold_overrides_operator_model_with_registered_model_nested(tmp_path, monkeypatch):
+    """Nested operator model blocks must receive model.default from registration."""
+    yaml = pytest.importorskip("yaml")
+    fake_home = tmp_path / "operator-home"
+    operator_hermes = fake_home / ".hermes"
+    operator_hermes.mkdir(parents=True)
+    (operator_hermes / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "model": {"default": "google/gemini-3.1-pro-preview", "provider": "nous"},
+                "provider": "nous",
+            }
+        )
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    entry = _base_entry(tmp_path)
+    entry["model"] = "codex:gpt-5.5"
+    home = gateway_core._scaffold_hermes_plugin_home(entry)
+    rendered = yaml.safe_load((home / "config.yaml").read_text())
+
+    assert rendered["model"]["default"] == "codex:gpt-5.5"
+    assert rendered["model"]["provider"] == "openai-codex"
+    assert rendered["provider"] == "openai-codex"
+
+
+def test_scaffold_keeps_operator_model_when_agent_has_no_registration(tmp_path, monkeypatch):
+    yaml = pytest.importorskip("yaml")
+    fake_home = tmp_path / "operator-home"
+    operator_hermes = fake_home / ".hermes"
+    operator_hermes.mkdir(parents=True)
+    (operator_hermes / "config.yaml").write_text(yaml.safe_dump({"model": "gpt-5.5"}))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    entry = _base_entry(tmp_path)
+    home = gateway_core._scaffold_hermes_plugin_home(entry)
+    rendered = yaml.safe_load((home / "config.yaml").read_text())
+
+    assert rendered["model"] == "gpt-5.5"
+
+
 def test_scaffold_replaces_stale_config_symlink(tmp_path, monkeypatch):
     """Upgrading from the old symlink-based scaffold must not leave a
     stale symlink in place — otherwise the identity bleed survives.
