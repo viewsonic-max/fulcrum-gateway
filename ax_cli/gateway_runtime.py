@@ -1048,10 +1048,39 @@ class ManagedAgentRuntime:
         process = self._supervised_process
         if process is None:
             return
+        # Initialise to "already due" so the first presence check fires on the
+        # first healthy PID-alive tick rather than after a 30s cold gap.
+        _last_presence_check = time.monotonic() - RUNTIME_HEARTBEAT_INTERVAL_SECONDS
         while not self.stop_event.wait(timeout=5.0):
             returncode = process.poll()
             if returncode is None:
-                self._update_state(effective_state="running", last_seen_at=_now_iso(), last_error=None)
+                # PID alive — update effective_state but do NOT stamp
+                # last_seen_at from PID existence alone (issue #327).
+                self._update_state(effective_state="running", last_error=None)
+                _now = time.monotonic()
+                if _now - _last_presence_check >= RUNTIME_HEARTBEAT_INTERVAL_SECONDS:
+                    _last_presence_check = _now
+                    # Drive last_seen_at from the backend's own view of the
+                    # plugin's activity. The hermes_plugin posts directly to
+                    # aX, so the backend's timestamp reflects the plugin's
+                    # own SSE heartbeats — not a supervisor-side PID check.
+                    # A wedged plugin stops sending its own heartbeats; its
+                    # backend presence ages out and this check stops
+                    # refreshing local state, letting the staleness ladder fire.
+                    try:
+                        client = self._new_client()
+                        try:
+                            presence = client.get_agent_presence(
+                                self.agent_id or self.name,
+                                space_id=self.space_id or None,
+                            )
+                            backend_ts = presence.get("last_seen_at") or presence.get("last_active")
+                            if backend_ts:
+                                self._update_state(last_seen_at=str(backend_ts))
+                        finally:
+                            client.close()
+                    except Exception:  # noqa: BLE001
+                        pass
                 continue
             status = "stopped" if returncode == 0 else "error"
             error = None if returncode == 0 else f"Hermes plugin exited with code {returncode}"
