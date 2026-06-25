@@ -23,6 +23,7 @@ from .config import _global_config_dir
 from .gateway_constants import _GATEWAY_PROCESS_RE, _GATEWAY_UI_PROCESS_RE, DEFAULT_ACTIVITY_LIMIT, phase_for_event
 
 _ACTIVITY_LOCK = threading.Lock()
+_token_file_migration_done: str | None = None  # registry path where migration was last confirmed complete
 
 
 @contextlib.contextmanager
@@ -726,7 +727,13 @@ def load_gateway_registry() -> dict[str, Any]:
     # Heal absolute token_file paths frozen in by an older `agents add` into the
     # portable `agents/<name>/token` relative form (#89). In-memory only, like
     # the space-id reconcile above — the next save_gateway_registry persists it.
-    migrate_registry_token_files(registry)
+    # Skip the scan once all entries are known-canonical (#169): after the first
+    # pass with zero rewrites, set a process-level flag so subsequent loads are O(1).
+    global _token_file_migration_done
+    _rpath = str(registry_path())
+    if _token_file_migration_done != _rpath:
+        if migrate_registry_token_files(registry) == 0:
+            _token_file_migration_done = _rpath
     # Stamp a load-time snapshot so save_gateway_registry can distinguish:
     #   - "caller removed this row" vs "another writer added this row"
     #     (row existence diff)
