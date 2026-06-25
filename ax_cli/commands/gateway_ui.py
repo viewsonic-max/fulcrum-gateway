@@ -3165,6 +3165,9 @@ def _render_agent_detail(entry: dict, *, activity: list[dict]) -> Group:
     paths.add_row("Token File", str(entry.get("token_file") or "-"))
     paths.add_row("Workdir", str(entry.get("workdir") or "-"))
     paths.add_row("Exec", str(entry.get("exec_command") or "-"))
+    disabled_toolsets = entry.get("disabled_toolsets")
+    if isinstance(disabled_toolsets, list) and disabled_toolsets:
+        paths.add_row("Disabled Toolsets", ", ".join(str(t) for t in disabled_toolsets))
     paths.add_row("Added", _format_timestamp(entry.get("added_at")))
 
     panels = [

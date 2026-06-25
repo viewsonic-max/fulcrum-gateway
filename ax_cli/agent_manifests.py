@@ -52,6 +52,7 @@ class ManifestDict(TypedDict, total=False):
     timeout_seconds: int
     allow_all_users: bool
     allowed_users: str  # comma-separated list per existing CLI
+    disabled_toolsets: list[str]  # hermes_plugin only — Hermes toolsets to disable for this agent (#366)
     exec_command: str  # → exec_cmd
     client: str
     connector_ref: str
@@ -76,6 +77,7 @@ FIELD_TO_KWARG: dict[str, str] = {
     "timeout_seconds": "timeout_seconds",
     "allow_all_users": "allow_all_users",
     "allowed_users": "allowed_users",
+    "disabled_toolsets": "disabled_toolsets",
     "exec_command": "exec_cmd",
     "client": "agent_client",
     "connector_ref": "connector_ref",
@@ -98,6 +100,7 @@ ENTRY_TO_MANIFEST: dict[str, str] = {
     "timeout_seconds": "timeout_seconds",
     "allow_all_users": "allow_all_users",
     "allowed_users": "allowed_users",
+    "disabled_toolsets": "disabled_toolsets",
     "exec_command": "exec_command",
     "client": "client",
     "connector_ref": "connector_ref",
@@ -177,6 +180,10 @@ def parse_manifest(path: Path | str) -> ManifestDict:
         au = raw["allow_all_users"]
         if not isinstance(au, bool):
             raise ManifestError(f"allow_all_users must be a boolean; got {type(au).__name__}")
+    if "disabled_toolsets" in raw:
+        dt = raw["disabled_toolsets"]
+        if not isinstance(dt, list) or not all(isinstance(x, str) for x in dt):
+            raise ManifestError(f"disabled_toolsets must be a list of strings; got {type(dt).__name__}")
 
     manifest: ManifestDict = {}
     for k, v in raw.items():
@@ -351,6 +358,7 @@ def build_update_kwargs(manifest: ManifestDict, *, unset_sentinel: Any) -> dict[
         "timeout_seconds",
         "allow_all_users",
         "allowed_users",
+        "disabled_toolsets",
         "exec_command",
         "client",
         "connector_ref",

@@ -2865,3 +2865,108 @@ def test_update_agent_404_raises_actionable_error(monkeypatch, tmp_path):
     assert result.exit_code == 1
     assert "not found on the platform" in result.output
     assert "remove" in result.output
+
+
+# #366: --disable-toolset CLI wiring
+
+
+def test_gateway_agents_add_disable_toolset_persists_in_registry(monkeypatch, tmp_path):
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("AX_CONFIG_DIR", str(config_dir))
+    gateway_core.save_gateway_session(
+        {"token": "axp_u_test.token", "base_url": "https://paxai.app", "space_id": "space-1", "username": "u"}
+    )
+    monkeypatch.setattr(_gw_agents, "_load_gateway_user_client", lambda: _FakeUserClient())
+    monkeypatch.setattr(_gw_agents, "_find_agent_in_space", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        _gw_agents, "_create_agent_in_space", lambda *args, **kwargs: {"id": "agent-1", "name": "reviewer"}
+    )
+    monkeypatch.setattr(_gw_agents, "_polish_metadata", lambda *args, **kwargs: None)
+    monkeypatch.setattr(_gw_agents, "_mint_agent_pat", lambda *args, **kwargs: ("axp_a_agent.secret", "mgmt"))
+    monkeypatch.setattr(_gw_agents, "_validate_hermes_provider", lambda _p: None)
+    monkeypatch.setattr(_gw_agents, "hermes_setup_status", lambda _entry: {"ready": True})
+
+    result = runner.invoke(
+        app,
+        [
+            "gateway",
+            "agents",
+            "add",
+            "reviewer",
+            "--type",
+            "hermes_plugin",
+            "--workdir",
+            str(tmp_path / "wd"),
+            "--disable-toolset",
+            "terminal",
+            "--disable-toolset",
+            "code_execution",
+            "--no-start",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    registry = gateway_core.load_gateway_registry()
+    assert registry["agents"][0]["disabled_toolsets"] == ["terminal", "code_execution"]
+
+
+def test_gateway_agents_add_disable_toolset_rejected_on_non_hermes_plugin(monkeypatch, tmp_path):
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("AX_CONFIG_DIR", str(config_dir))
+    gateway_core.save_gateway_session(
+        {"token": "axp_u_test.token", "base_url": "https://paxai.app", "space_id": "space-1", "username": "u"}
+    )
+    monkeypatch.setattr(_gw_agents, "_load_gateway_user_client", lambda: _FakeUserClient())
+    monkeypatch.setattr(_gw_agents, "_find_agent_in_space", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        _gw_agents, "_create_agent_in_space", lambda *args, **kwargs: {"id": "agent-1", "name": "echo-bot"}
+    )
+    monkeypatch.setattr(_gw_agents, "_polish_metadata", lambda *args, **kwargs: None)
+    monkeypatch.setattr(_gw_agents, "_mint_agent_pat", lambda *args, **kwargs: ("axp_a_agent.secret", "mgmt"))
+
+    result = runner.invoke(
+        app,
+        ["gateway", "agents", "add", "echo-bot", "--type", "echo", "--disable-toolset", "terminal"],
+    )
+
+    assert result.exit_code != 0
+    assert "hermes_plugin" in result.output
+
+
+def test_gateway_agents_update_clear_disabled_toolsets_removes_field(monkeypatch, tmp_path):
+    config_dir = tmp_path / "config"
+    monkeypatch.setenv("AX_CONFIG_DIR", str(config_dir))
+    gateway_core.save_gateway_session(
+        {"token": "axp_u_test.token", "base_url": "https://paxai.app", "space_id": "space-1", "username": "u"}
+    )
+    registry = gateway_core.load_gateway_registry()
+    registry["agents"] = [
+        {
+            "name": "reviewer",
+            "agent_id": "agent-1",
+            "space_id": "space-1",
+            "base_url": "https://paxai.app",
+            "runtime_type": "hermes_plugin",
+            "workdir": str(tmp_path / "wd"),
+            "token_file": gateway_core.agent_token_relpath("reviewer"),
+            "desired_state": "stopped",
+            "effective_state": "stopped",
+            "transport": "gateway",
+            "credential_source": "gateway",
+            "disabled_toolsets": ["terminal", "code_execution"],
+        }
+    ]
+    gateway_core.save_gateway_registry(registry)
+    token_path = gateway_core.agent_token_path("reviewer")
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    token_path.write_text("axp_a_agent.secret")
+
+    monkeypatch.setattr(_gw_agents, "_load_gateway_user_client", lambda: _FakeUserClient())
+    monkeypatch.setattr(_gw_agents, "hermes_setup_status", lambda _entry: {"ready": True})
+
+    result = runner.invoke(app, ["gateway", "agents", "update", "reviewer", "--clear-disabled-toolsets", "--json"])
+
+    assert result.exit_code == 0, result.output
+    registry_after = gateway_core.load_gateway_registry()
+    assert "disabled_toolsets" not in registry_after["agents"][0]

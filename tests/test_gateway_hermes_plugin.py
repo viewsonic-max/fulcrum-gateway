@@ -434,3 +434,74 @@ def test_hermes_bin_raises_when_unresolvable(tmp_path, monkeypatch):
     monkeypatch.setattr(gateway_core.shutil, "which", lambda _name: None)
     with pytest.raises(RuntimeError, match="hermes CLI not found"):
         gateway_core._hermes_bin(entry)
+
+
+# #366: per-agent disabled_toolsets render into the scaffolded Hermes config
+
+
+def test_scaffold_renders_registered_disabled_toolsets(tmp_path, monkeypatch):
+    yaml = pytest.importorskip("yaml")
+    fake_home = tmp_path / "operator-home"
+    operator_hermes = fake_home / ".hermes"
+    operator_hermes.mkdir(parents=True)
+    (operator_hermes / "config.yaml").write_text(yaml.safe_dump({"model": "gpt-5.5"}))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    entry = _base_entry(tmp_path)
+    entry["disabled_toolsets"] = ["terminal", "code_execution", "computer_use"]
+    home = gateway_core._scaffold_hermes_plugin_home(entry)
+    rendered = yaml.safe_load((home / "config.yaml").read_text())
+
+    assert rendered["agent"]["disabled_toolsets"] == ["terminal", "code_execution", "computer_use"]
+
+
+def test_scaffold_unions_agent_disabled_toolsets_with_operator_defaults(tmp_path, monkeypatch):
+    """Operator-side disabled_toolsets are preserved; agent's stack on top."""
+    yaml = pytest.importorskip("yaml")
+    fake_home = tmp_path / "operator-home"
+    operator_hermes = fake_home / ".hermes"
+    operator_hermes.mkdir(parents=True)
+    (operator_hermes / "config.yaml").write_text(
+        yaml.safe_dump({"agent": {"disabled_toolsets": ["image_gen", "tts"]}, "model": "gpt-5.5"})
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    entry = _base_entry(tmp_path)
+    entry["disabled_toolsets"] = ["terminal", "tts"]  # tts is already operator-disabled
+    home = gateway_core._scaffold_hermes_plugin_home(entry)
+    rendered = yaml.safe_load((home / "config.yaml").read_text())
+
+    assert rendered["agent"]["disabled_toolsets"] == ["image_gen", "tts", "terminal"]
+
+
+def test_scaffold_leaves_operator_disabled_toolsets_alone_without_agent_registration(tmp_path, monkeypatch):
+    yaml = pytest.importorskip("yaml")
+    fake_home = tmp_path / "operator-home"
+    operator_hermes = fake_home / ".hermes"
+    operator_hermes.mkdir(parents=True)
+    (operator_hermes / "config.yaml").write_text(
+        yaml.safe_dump({"agent": {"disabled_toolsets": ["image_gen"]}, "model": "gpt-5.5"})
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    entry = _base_entry(tmp_path)
+    home = gateway_core._scaffold_hermes_plugin_home(entry)
+    rendered = yaml.safe_load((home / "config.yaml").read_text())
+
+    assert rendered["agent"]["disabled_toolsets"] == ["image_gen"]
+
+
+def test_scaffold_dedupes_and_trims_agent_disabled_toolsets(tmp_path, monkeypatch):
+    yaml = pytest.importorskip("yaml")
+    fake_home = tmp_path / "operator-home"
+    operator_hermes = fake_home / ".hermes"
+    operator_hermes.mkdir(parents=True)
+    (operator_hermes / "config.yaml").write_text(yaml.safe_dump({"model": "gpt-5.5"}))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+    entry = _base_entry(tmp_path)
+    entry["disabled_toolsets"] = ["  terminal ", "", "terminal", "code_execution"]
+    home = gateway_core._scaffold_hermes_plugin_home(entry)
+    rendered = yaml.safe_load((home / "config.yaml").read_text())
+
+    assert rendered["agent"]["disabled_toolsets"] == ["terminal", "code_execution"]
