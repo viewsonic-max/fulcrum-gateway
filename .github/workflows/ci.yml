@@ -6,6 +6,14 @@ on:
   push:
     branches: [main]
 
+# Cancel an in-flight run when a newer commit lands on the same branch/PR, so we
+# don't burn Actions minutes finishing CI (tests, lint, secret + audit scans) for
+# commits that are already superseded. Scoped to the ref so unrelated branches are
+# unaffected.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
