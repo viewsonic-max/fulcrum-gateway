@@ -12,9 +12,12 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
+
 from .. import gateway as gateway_core
 from ..gateway import (
     annotate_runtime_health,
+    apply_entry_current_space,
     evaluate_runtime_attestation,
     find_agent_entry,
     find_agent_entry_by_ref,
@@ -22,6 +25,7 @@ from ..gateway import (
     issue_local_session,
     load_agent_pending_messages,
     load_gateway_registry,
+    load_gateway_session,
     record_gateway_activity,
     save_agent_pending_messages,
     save_gateway_registry,
@@ -352,6 +356,74 @@ def _ensure_session_challenge(
     return new_code
 
 
+def _platform_error_detail(exc: httpx.HTTPStatusError) -> str:
+    """Pull the platform's JSON ``detail`` out of a failed response.
+
+    FastAPI errors are ``{"detail": "..."}``; the bare httpx message
+    (``Client error '404 Not Found' for url ...``) hides the server's
+    reason. Surface ``detail`` so the operator sees e.g. ``Space not
+    found: '<id>'`` instead of an opaque URL.
+    """
+    try:
+        detail = exc.response.json().get("detail")
+        if isinstance(detail, str) and detail.strip():
+            return detail.strip()
+    except Exception:
+        pass
+    return (exc.response.text or "").strip() or str(exc)
+
+
+def _is_stale_space_error(exc: httpx.HTTPStatusError) -> bool:
+    """True when the send was rejected because the target space is gone.
+
+    The platform returns ``404 Space not found: '<id>'`` (see platform
+    ``require_space``) when a pinned/hydrated ``space_id`` is no longer in
+    the live space set — e.g. after an in-memory backend restart regenerates
+    space ids while an agent row still references the old one.
+    """
+    return exc.response.status_code == 404 and "space not found" in _platform_error_detail(exc).lower()
+
+
+def _live_space_ids(client) -> set[str]:
+    """Best-effort set of space ids the platform currently knows about.
+
+    Uses the agent's own send client (no user PAT), and returns an empty
+    set on any failure so the caller can degrade to a clear error rather
+    than crash.
+    """
+    try:
+        raw = client.list_spaces()
+    except Exception:
+        return set()
+    items = raw.get("spaces", raw) if isinstance(raw, dict) else raw
+    ids: set[str] = set()
+    for item in items or []:
+        if isinstance(item, dict):
+            sid = str(item.get("id") or item.get("space_id") or "").strip()
+            if sid:
+                ids.add(sid)
+    return ids
+
+
+def _resolve_live_fallback_space(client, attempted: str) -> str | None:
+    """Pick a live space to retry into when ``attempted`` is stale.
+
+    Prefers the Gateway session's current space (the operator's explicit
+    selection via ``ax gateway spaces use``) when it is live, otherwise the
+    first live space deterministically. Returns ``None`` when no usable live
+    space exists or the only live space is the one that already failed.
+    """
+    live = _live_space_ids(client)
+    if not live or attempted in live:
+        return None
+    session = load_gateway_session() or {}
+    current = str(session.get("space_id") or session.get("active_space_id") or "").strip()
+    if current and current in live and current != attempted:
+        return current
+    candidates = sorted(s for s in live if s != attempted)
+    return candidates[0] if candidates else None
+
+
 def _send_local_session_message(*, session_token: str, body: dict) -> dict:
     registry = load_gateway_registry()
     session = verify_local_session_token(registry, session_token)
@@ -410,16 +482,47 @@ def _send_local_session_message(*, session_token: str, body: dict) -> dict:
     attachments_payload: list[dict] | None = None
     if isinstance(raw_attachments, list) and raw_attachments:
         attachments_payload = [a for a in raw_attachments if isinstance(a, dict)]
-    payload = client.send_message(
-        space_id,
-        content,
-        agent_id=str(entry.get("agent_id") or "") or None,
-        channel=str(body.get("channel") or "main"),
-        parent_id=parent_id or None,
-        metadata=metadata,
-        message_type=str(body.get("message_type") or "text"),
-        attachments=attachments_payload,
-    )
+
+    def _do_send(target_space: str) -> dict:
+        return client.send_message(
+            target_space,
+            content,
+            agent_id=str(entry.get("agent_id") or "") or None,
+            channel=str(body.get("channel") or "main"),
+            parent_id=parent_id or None,
+            metadata=metadata,
+            message_type=str(body.get("message_type") or "text"),
+            attachments=attachments_payload,
+        )
+
+    try:
+        payload = _do_send(space_id)
+    except httpx.HTTPStatusError as exc:
+        # A pinned/hydrated space_id can go stale (platform restart, moved
+        # agent). The platform fails closed with 404 "Space not found"; rather
+        # than surface a bare URL 404, fall back to a live space once. This is
+        # the gateway companion to platform PR #7's fail-closed behavior.
+        if not _is_stale_space_error(exc):
+            raise
+        fallback = _resolve_live_fallback_space(client, space_id)
+        if not fallback:
+            raise ValueError(
+                f"Space {space_id!r} no longer exists on the server "
+                f"({_platform_error_detail(exc)}). No live space was available to "
+                f"fall back to — re-pin this agent with "
+                f"`ax gateway agents move {entry.get('name')} --space <live-space-id>` "
+                f"or send with `--space <live-space-id>`."
+            ) from exc
+        record_gateway_activity(
+            "local_message_space_fallback",
+            entry=entry,
+            stale_space_id=space_id,
+            fallback_space_id=fallback,
+        )
+        apply_entry_current_space(entry, fallback, make_default=False)
+        save_gateway_registry(registry)
+        payload = _do_send(fallback)
+        space_id = fallback
     record_gateway_activity(
         "local_message_sent",
         entry=entry,

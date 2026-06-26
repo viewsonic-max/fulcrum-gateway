@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import sys
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
@@ -521,3 +522,111 @@ def test_proxy_upload_file_rejects_path_outside_workdir(monkeypatch, tmp_path):
     except (ValueError, PermissionError) as exc:
         # Expected after the fix: proxy should raise on path traversal
         assert "workdir" in str(exc).lower() or "path" in str(exc).lower() or "outside" in str(exc).lower()
+
+
+def _stale_space_error(space_id: str) -> httpx.HTTPStatusError:
+    """Build the 404 the platform raises for a vanished space (require_space)."""
+    request = httpx.Request("POST", "http://platform/api/v1/messages")
+    response = httpx.Response(404, json={"detail": f"Space not found: '{space_id}'"}, request=request)
+    return httpx.HTTPStatusError("404 Not Found", request=request, response=response)
+
+
+def test_platform_error_detail_extracts_server_detail():
+    exc = _stale_space_error("abc")
+    assert _gw_session._platform_error_detail(exc) == "Space not found: 'abc'"
+    assert _gw_session._is_stale_space_error(exc) is True
+
+
+def test_is_stale_space_error_false_for_non_space_failures():
+    request = httpx.Request("POST", "http://platform/api/v1/messages")
+    forbidden = httpx.HTTPStatusError(
+        "403", request=request, response=httpx.Response(403, json={"detail": "forbidden"}, request=request)
+    )
+    not_found_other = httpx.HTTPStatusError(
+        "404", request=request, response=httpx.Response(404, json={"detail": "Agent not found"}, request=request)
+    )
+    assert _gw_session._is_stale_space_error(forbidden) is False
+    assert _gw_session._is_stale_space_error(not_found_other) is False
+
+
+def test_resolve_live_fallback_prefers_live_session_space(monkeypatch):
+    class _C:
+        def list_spaces(self):
+            return {"spaces": [{"id": "live-a"}, {"id": "live-b"}]}
+
+    monkeypatch.setattr(_gw_session, "load_gateway_session", lambda: {"space_id": "live-b"})
+    assert _gw_session._resolve_live_fallback_space(_C(), "dead") == "live-b"
+
+
+def test_resolve_live_fallback_first_live_when_session_space_also_dead(monkeypatch):
+    class _C:
+        def list_spaces(self):
+            return {"spaces": [{"id": "live-a"}, {"id": "live-b"}]}
+
+    monkeypatch.setattr(_gw_session, "load_gateway_session", lambda: {"space_id": "also-dead"})
+    assert _gw_session._resolve_live_fallback_space(_C(), "dead") == "live-a"
+
+
+def test_resolve_live_fallback_none_when_attempted_space_is_live(monkeypatch):
+    class _C:
+        def list_spaces(self):
+            return {"spaces": [{"id": "live-a"}]}
+
+    monkeypatch.setattr(_gw_session, "load_gateway_session", lambda: {})
+    assert _gw_session._resolve_live_fallback_space(_C(), "live-a") is None
+
+
+def test_send_local_session_falls_back_to_live_space_on_stale_404(monkeypatch, tmp_path):
+    """A stale pinned space_id (404 Space not found) is retried into a live space."""
+    monkeypatch.delenv("AX_GATEWAY_SESSION_CHALLENGE", raising=False)
+    token = _seed_local_session_for_challenge(tmp_path, monkeypatch)
+
+    class _StaleThenLiveClient:
+        def __init__(self):
+            self.sent = []
+
+        def list_spaces(self):
+            return {"spaces": [{"id": "space-live", "name": "Live"}]}
+
+        def send_message(self, space_id, content, **kwargs):
+            self.sent.append(space_id)
+            if space_id != "space-live":
+                raise _stale_space_error(space_id)
+            return {"message": {"id": "ok-1", "space_id": space_id, "content": content}}
+
+    client = _StaleThenLiveClient()
+    monkeypatch.setattr(_gw_session, "_load_managed_agent_client", lambda entry: client)
+
+    payload = _gw_session._send_local_session_message(
+        session_token=token,
+        body={"content": "hello", "space_id": "space-stale"},
+    )
+
+    # First attempt hits the stale space, then retries into the live space.
+    assert client.sent == ["space-stale", "space-live"]
+    assert payload["message"]["message"]["id"] == "ok-1"
+
+
+def test_send_local_session_stale_space_without_live_fallback_raises_actionable(monkeypatch, tmp_path):
+    """No live space to fall back to → actionable error naming the move command."""
+    monkeypatch.delenv("AX_GATEWAY_SESSION_CHALLENGE", raising=False)
+    token = _seed_local_session_for_challenge(tmp_path, monkeypatch)
+
+    class _NoLiveSpaceClient:
+        def list_spaces(self):
+            return {"spaces": []}
+
+        def send_message(self, space_id, content, **kwargs):
+            raise _stale_space_error(space_id)
+
+    monkeypatch.setattr(_gw_session, "_load_managed_agent_client", lambda entry: _NoLiveSpaceClient())
+
+    with pytest.raises(ValueError) as excinfo:
+        _gw_session._send_local_session_message(
+            session_token=token,
+            body={"content": "hello", "space_id": "space-stale"},
+        )
+    msg = str(excinfo.value)
+    assert "no longer exists" in msg.lower()
+    assert "ax gateway agents move" in msg
+    assert "space-stale" in msg
